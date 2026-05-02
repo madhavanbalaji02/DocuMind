@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "documind"
+version = "0.1.0"
+description = "Production-grade multi-agent research and intelligence platform"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=0.3",
+    "langchain-community>=0.3",
+    "langchain-openai>=0.2",
+    "langgraph>=0.2",
+    "langgraph-checkpoint-postgres>=0.1",
+    "crewai>=0.80",
+    "crewai-tools>=0.15",
+    "qdrant-client>=1.12",
+    "asyncpg>=0.30",
+    "psycopg2-binary>=2.9",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "websockets>=13",
+    "streamlit>=1.40",
+    "sentence-transformers>=3.3",
+    "mcp>=1.0",
+    "openai>=1.55",
+    "anthropic>=0.40",
+    "python-dotenv>=1.0",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    "httpx>=0.28",
+    "rank-bm25>=0.2",
+    "pypdf>=5.1",
+    "beautifulsoup4>=4.12",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "rich>=13.9",
+    "typer>=0.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-mock>=3.14",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[project.scripts]
+documind-api = "src.api.main:start"
+documind-mcp = "src.mcp_server.server:main"
+documind-ingest = "src.ingest.pipeline:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
