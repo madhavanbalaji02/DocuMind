@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 
 import httpx
 from crewai.tools import tool
+
+from src.db import connection as db
+from src.rag.rag_chain import RAGChain
 
 logger = logging.getLogger(__name__)
 
@@ -16,17 +18,22 @@ _SELECT_ONLY = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 
 
 def _run_async(coro):
-    """Run a coroutine from synchronous CrewAI tool context."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
+    """Run a coroutine from synchronous CrewAI tool context.
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(asyncio.run, coro)
-                return future.result()
-        return loop.run_until_complete(coro)
+    Uses get_running_loop() to detect whether we are inside an async context
+    (FastAPI, tests with asyncio mode). If so, offloads to a thread so we
+    don't block the event loop. Otherwise calls asyncio.run() directly.
+    """
+    import concurrent.futures
+
+    try:
+        asyncio.get_running_loop()
+        # A loop is already running (FastAPI / async test) — run in a thread.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
     except RuntimeError:
+        # No running loop — safe to call asyncio.run() directly.
         return asyncio.run(coro)
 
 
@@ -37,7 +44,6 @@ def search_knowledge_base(query: str) -> str:
     Args:
         query: The research question or topic to look up.
     """
-    from src.rag.rag_chain import RAGChain
 
     async def _query():
         rag = RAGChain()
@@ -74,11 +80,9 @@ def search_web(query: str) -> str:
 
         results: list[str] = []
 
-        # Abstract / instant answer
         if data.get("AbstractText"):
             results.append(f"**Summary:** {data['AbstractText']}\nSource: {data.get('AbstractURL', '')}")
 
-        # Related topics
         for item in data.get("RelatedTopics", [])[:3]:
             if isinstance(item, dict) and item.get("Text"):
                 results.append(f"- {item['Text']}")
@@ -99,8 +103,6 @@ def query_database(sql: str) -> str:
         return "Error: only SELECT queries are permitted."
 
     async def _query():
-        from src.db import connection as db
-
         try:
             rows = await db.fetch(sql)
         except Exception as exc:
@@ -128,8 +130,6 @@ def get_past_reports(topic: str) -> str:
     """
 
     async def _fetch():
-        from src.db import connection as db
-
         rows = await db.fetch(
             """
             SELECT s.topic, r.title, r.quality_score, r.word_count,

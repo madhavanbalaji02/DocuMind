@@ -11,9 +11,8 @@ import pytest
 
 class TestSearchKnowledgeBaseTool:
     def test_returns_formatted_answer_with_citations(self):
-        from src.rag.rag_chain import RAGResponse
+        from src.rag.rag_chain import Citation, RAGResponse
         from src.rag.retriever import RetrievedChunk
-        from src.rag.rag_chain import Citation
 
         mock_response = RAGResponse(
             answer="Transformers use self-attention mechanisms.",
@@ -35,6 +34,7 @@ class TestSearchKnowledgeBaseTool:
         async def mock_close():
             pass
 
+        # RAGChain is imported at module level in tools.py so patch there
         with patch("src.agents.tools.RAGChain") as mock_cls:
             mock_rag = MagicMock()
             mock_rag.query = mock_query
@@ -43,13 +43,14 @@ class TestSearchKnowledgeBaseTool:
 
             from src.agents.tools import search_knowledge_base
 
-            result = search_knowledge_base("How do transformers work?")
+            # CrewAI @tool wraps function in Tool object; call via .run()
+            result = search_knowledge_base.run("How do transformers work?")
 
         assert "Transformers use self-attention" in result
         assert "attention_paper.pdf" in result
         assert "Citations" in result
 
-    def test_returns_string_on_rag_failure(self):
+    def test_propagates_rag_exception(self):
         async def mock_query(*args, **kwargs):
             raise RuntimeError("Qdrant unavailable")
 
@@ -64,8 +65,8 @@ class TestSearchKnowledgeBaseTool:
 
             from src.agents.tools import search_knowledge_base
 
-            with pytest.raises(RuntimeError):
-                search_knowledge_base("test query")
+            with pytest.raises(RuntimeError, match="Qdrant unavailable"):
+                search_knowledge_base.run("test query")
 
 
 # ── query_database tool ───────────────────────────────────────────────────────
@@ -75,24 +76,27 @@ class TestQueryDatabaseTool:
         from src.agents.tools import query_database
 
         for dangerous_sql in ["DROP TABLE sessions", "DELETE FROM reports", "UPDATE sessions SET"]:
-            result = query_database(dangerous_sql)
+            result = query_database.run(dangerous_sql)
             assert "Error" in result
             assert "SELECT" in result
 
     def test_formats_results_as_markdown_table(self):
         mock_row = MagicMock()
         mock_row.keys.return_value = ["id", "topic", "status"]
-        mock_row.__getitem__ = lambda self, key: {"id": "abc", "topic": "AI", "status": "done"}[key]
+        mock_row.__getitem__ = lambda self, key: {
+            "id": "abc", "topic": "AI", "status": "done"
+        }[key]
 
         async def mock_fetch(*args, **kwargs):
             return [mock_row]
 
+        # db is imported at module level in tools.py as `from src.db import connection as db`
         with patch("src.agents.tools.db") as mock_db:
             mock_db.fetch = mock_fetch
 
             from src.agents.tools import query_database
 
-            result = query_database("SELECT id, topic, status FROM sessions LIMIT 1")
+            result = query_database.run("SELECT id, topic, status FROM sessions LIMIT 1")
 
         assert "|" in result
         assert "id" in result
@@ -107,7 +111,7 @@ class TestQueryDatabaseTool:
 
             from src.agents.tools import query_database
 
-            result = query_database("SELECT * FROM sessions WHERE 1=0")
+            result = query_database.run("SELECT * FROM sessions WHERE 1=0")
 
         assert "no rows" in result.lower()
 
@@ -124,7 +128,7 @@ class TestGetPastReportsTool:
 
             from src.agents.tools import get_past_reports
 
-            result = get_past_reports("quantum computing")
+            result = get_past_reports.run("quantum computing")
 
         assert "No past reports" in result
         assert "quantum computing" in result
@@ -150,7 +154,7 @@ class TestGetPastReportsTool:
 
             from src.agents.tools import get_past_reports
 
-            result = get_past_reports("AI research")
+            result = get_past_reports.run("AI research")
 
         assert "Report 0" in result
         assert "Report 1" in result
@@ -160,23 +164,24 @@ class TestGetPastReportsTool:
 
 class TestSearchWebTool:
     def test_handles_network_error_gracefully(self):
-        import httpx
-
-        async def mock_get(*args, **kwargs):
-            raise httpx.ConnectError("Connection refused")
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        # httpx is imported at module level in tools.py, so patch there
+        with patch("src.agents.tools.httpx.AsyncClient") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            async def mock_get(*args, **kwargs):
+                raise Exception("Connection refused")
+
             mock_client.get = mock_get
             mock_client_cls.return_value = mock_client
 
             from src.agents.tools import search_web
 
-            result = search_web("transformer models")
+            result = search_web.run("transformer models")
 
-        assert "unavailable" in result.lower() or isinstance(result, str)
+        assert isinstance(result, str)
+        assert "unavailable" in result.lower()
 
     def test_formats_duckduckgo_response(self):
         mock_response = MagicMock()
@@ -193,7 +198,7 @@ class TestSearchWebTool:
         async def mock_get(*args, **kwargs):
             return mock_response
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
+        with patch("src.agents.tools.httpx.AsyncClient") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
@@ -202,7 +207,7 @@ class TestSearchWebTool:
 
             from src.agents.tools import search_web
 
-            result = search_web("transformer neural networks")
+            result = search_web.run("transformer neural networks")
 
         assert "Transformers are neural network" in result
 
@@ -212,14 +217,13 @@ class TestSearchWebTool:
 class TestResearchCrew:
     @pytest.mark.asyncio
     async def test_crew_run_persists_agent_runs(self):
-        """Crew.kickoff output should be saved to agent_runs table."""
         mock_task_output = MagicMock()
         mock_task_output.__str__ = lambda self: "Task output text"
 
-        with patch("src.agents.crew.build_researcher") as mock_researcher, \
-             patch("src.agents.crew.build_analyst") as mock_analyst, \
-             patch("src.agents.crew.build_writer") as mock_writer, \
-             patch("src.agents.crew.build_critic") as mock_critic, \
+        with patch("src.agents.crew.build_researcher"), \
+             patch("src.agents.crew.build_analyst"), \
+             patch("src.agents.crew.build_writer"), \
+             patch("src.agents.crew.build_critic"), \
              patch("src.agents.crew.Crew") as mock_crew_cls, \
              patch("src.agents.crew.db") as mock_db:
 
@@ -233,7 +237,6 @@ class TestResearchCrew:
 
             crew = ResearchCrew()
 
-            # Patch tasks so output is set
             with patch.object(crew, "_build_tasks") as mock_build:
                 task1 = MagicMock()
                 task1.output = mock_task_output
@@ -245,12 +248,10 @@ class TestResearchCrew:
                     session_id="test-session",
                 )
 
-            # Should have attempted to save agent runs
             assert mock_db.execute.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_crew_result_contains_draft_report(self):
-        """CrewResult.draft_report should be a non-empty string."""
         with patch("src.agents.crew.build_researcher"), \
              patch("src.agents.crew.build_analyst"), \
              patch("src.agents.crew.build_writer"), \

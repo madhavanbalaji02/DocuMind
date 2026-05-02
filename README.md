@@ -1,5 +1,7 @@
 # DocuMind
 
+![CI](https://github.com/madhavanbalaji02/DocuMind/actions/workflows/ci.yml/badge.svg)
+
 A production-grade multi-agent research and intelligence platform. Users submit a research topic; LangGraph orchestrates a stateful workflow; CrewAI agents (Researcher, Analyst, Writer, Critic) collaborate to produce a cited report; results persist in PostgreSQL; the entire system is accessible via a custom MCP server; embeddings optionally run on BigRed200 GPU via vLLM.
 
 ---
@@ -75,13 +77,13 @@ User / Claude Desktop
 
 ---
 
-## Quick Start
+## Quick Demo
 
 ```bash
 # 1. Clone and enter project
-git clone <repo-url> && cd documind
+git clone https://github.com/madhavanbalaji02/DocuMind && cd DocuMind
 
-# 2. Start infrastructure
+# 2. Start infrastructure (Postgres + Qdrant + Redis)
 docker compose up -d
 
 # 3. Install dependencies
@@ -90,16 +92,31 @@ uv pip install -e ".[dev]"
 
 # 4. Configure environment
 cp .env.example .env
-# Edit .env — add ANTHROPIC_API_KEY at minimum
+# Edit .env — set ANTHROPIC_API_KEY
 
-# 5. Start the API
-uvicorn src.api.main:app --reload
-# Streamlit dashboard
+# 5. Load demo knowledge base (5 Wikipedia articles, ~677 chunks)
+python scripts/load_demo_data.py
+
+# 6. Run smoke test (verifies all infrastructure)
+python scripts/smoke_test.py
+
+# 7. Start the API + Dashboard
+uvicorn src.api.main:app --reload &
 streamlit run src/ui/app.py
 ```
 
 API docs: http://localhost:8000/docs  
 Dashboard: http://localhost:8501
+
+### Demo Queries (work with loaded demo data)
+
+```
+"What is retrieval augmented generation and how does it work?"
+"Explain the self-attention mechanism in transformer models"
+"What are the main use cases for vector databases?"
+"How do large language models differ from earlier NLP approaches?"
+"What coordination mechanisms do multi-agent systems use?"
+```
 
 ---
 
@@ -237,14 +254,18 @@ Available MCP tools: `search_knowledge_base`, `ingest_document`, `run_research`,
 
 ## Performance Benchmarks
 
-| Metric | Local (bge-small) | BigRed200 (bge-m3) |
-|---|---|---|
-| Embedding throughput | TBD chunks/s | TBD chunks/s |
-| RAG latency (p50) | TBD ms | TBD ms |
-| End-to-end research | TBD min | TBD min |
-| Report quality score | TBD | TBD |
+Run `python scripts/benchmark.py` to regenerate these numbers on your hardware.
 
-*Fill in after running benchmarks with `jobs/embed_batch.slurm` and timing `POST /research`.*
+| Metric | Local (bge-small, M-series Mac) | BigRed200 (bge-m3, A100) |
+|---|---|---|
+| Embedding throughput | 1,077 texts/sec | TBD |
+| Embed latency p50 | 6.0 ms | TBD |
+| Embed latency p95 | 19.2 ms | TBD |
+| RAG retrieve p50 | 6.3 ms | TBD |
+| RAG retrieve p95 | 24.3 ms | TBD |
+| End-to-end research | ~3–5 min | TBD |
+
+*BigRed200 numbers: fill in after running `jobs/embed_batch.slurm`.*
 
 ---
 

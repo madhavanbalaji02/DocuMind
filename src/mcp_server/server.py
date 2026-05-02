@@ -8,8 +8,9 @@ import logging
 from dotenv import load_dotenv
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+from mcp.types import Tool
 
-from src.mcp_server.tools import register_tools
+from src.mcp_server.tools import TOOLS, dispatch
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -22,7 +23,15 @@ async def _run() -> None:
     await db.run_migrations()
 
     server = Server("documind")
-    register_tools(server)
+
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        return TOOLS
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict):
+        logger.info("MCP tool call: %s args=%s", name, list(arguments.keys()))
+        return await dispatch(name, arguments)
 
     logger.info("DocuMind MCP server starting (stdio transport)")
     async with stdio_server() as (read_stream, write_stream):

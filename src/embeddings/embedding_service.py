@@ -31,9 +31,12 @@ class EmbeddingService:
             from sentence_transformers import SentenceTransformer
 
             self._local_model = SentenceTransformer(local_model_name)
-            logger.info(
-                "Local model loaded (dim=%d)", self._local_model.get_sentence_embedding_dimension()
+            dim = (
+                self._local_model.get_embedding_dimension()
+                if hasattr(self._local_model, "get_embedding_dimension")
+                else self._local_model.get_sentence_embedding_dimension()
             )
+            logger.info("Local model loaded (dim=%d)", dim)
         else:
             self._vllm_url = os.environ["BIGRED200_VLLM_URL"]
             self._embed_model = os.environ.get("BIGRED200_EMBED_MODEL", "BAAI/bge-m3")
@@ -48,6 +51,8 @@ class EmbeddingService:
     def embedding_dim(self) -> int:
         """Return dimensionality of the embedding vectors."""
         if self.mode == "local":
+            if hasattr(self._local_model, "get_embedding_dimension"):
+                return self._local_model.get_embedding_dimension()
             return self._local_model.get_sentence_embedding_dimension()
         return 1024  # bge-m3 default
 
