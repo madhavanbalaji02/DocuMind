@@ -86,7 +86,7 @@ class TestPlanResearchNode:
 class TestRetrieveContextNode:
     @pytest.mark.asyncio
     async def test_merges_chunks_from_multiple_questions(self):
-        from src.rag.rag_chain import RAGResponse
+        # retrieve_context now uses HybridRetriever directly (no LLM)
         from src.rag.retriever import RetrievedChunk
         from src.workflow.nodes import retrieve_context
 
@@ -100,18 +100,12 @@ class TestRetrieveContextNode:
             )
             for i in range(3)
         ]
-        mock_response = RAGResponse(
-            answer="Answer",
-            sources=[],
-            retrieved_chunks=mock_chunks,
-            confidence=0.8,
-        )
 
-        with patch("src.workflow.nodes.RAGChain") as mock_rag_cls:
-            mock_rag = AsyncMock()
-            mock_rag.query = AsyncMock(return_value=mock_response)
-            mock_rag.close = AsyncMock()
-            mock_rag_cls.return_value = mock_rag
+        with patch("src.rag.retriever.HybridRetriever") as mock_cls:
+            mock_retriever = MagicMock()
+            mock_retriever.retrieve = AsyncMock(return_value=mock_chunks)
+            mock_retriever.close = AsyncMock()
+            mock_cls.return_value = mock_retriever
 
             state = _base_state(research_plan=["Q1", "Q2"])
             result = await retrieve_context(state)
@@ -122,11 +116,9 @@ class TestRetrieveContextNode:
 
     @pytest.mark.asyncio
     async def test_deduplicates_chunks_across_questions(self):
-        from src.rag.rag_chain import RAGResponse
         from src.rag.retriever import RetrievedChunk
         from src.workflow.nodes import retrieve_context
 
-        # Same chunk_id returned for both questions — should appear once
         shared_chunk = RetrievedChunk(
             chunk_id="shared-id",
             text="Shared content.",
@@ -134,15 +126,12 @@ class TestRetrieveContextNode:
             score=0.9,
             rank=1,
         )
-        mock_response = RAGResponse(
-            answer="A", sources=[], retrieved_chunks=[shared_chunk], confidence=0.8
-        )
 
-        with patch("src.workflow.nodes.RAGChain") as mock_rag_cls:
-            mock_rag = AsyncMock()
-            mock_rag.query = AsyncMock(return_value=mock_response)
-            mock_rag.close = AsyncMock()
-            mock_rag_cls.return_value = mock_rag
+        with patch("src.rag.retriever.HybridRetriever") as mock_cls:
+            mock_retriever = MagicMock()
+            mock_retriever.retrieve = AsyncMock(return_value=[shared_chunk])
+            mock_retriever.close = AsyncMock()
+            mock_cls.return_value = mock_retriever
 
             state = _base_state(research_plan=["Q1", "Q2"])
             result = await retrieve_context(state)

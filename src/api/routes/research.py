@@ -32,6 +32,9 @@ class ResearchResponse(BaseModel):
     message: str
 
 
+WORKFLOW_TIMEOUT = 600.0  # 10-minute absolute maximum
+
+
 async def _run_workflow(session_id: str, topic: str, prior_context: str = "") -> None:
     from src.workflow.graph import build_research_graph
     from src.workflow.state import ResearchState
@@ -55,14 +58,9 @@ async def _run_workflow(session_id: str, topic: str, prior_context: str = "") ->
         await db.execute(
             "UPDATE sessions SET status = 'running' WHERE id = $1::uuid", session_id
         )
-        await graph.ainvoke(initial_state)
-    except anthropic.APIError as exc:
-        logger.error("LLM API error for session %s: %s", session_id, exc)
-        await db.execute(
-            "UPDATE sessions SET status = 'failed' WHERE id = $1::uuid", session_id
-        )
-    except (UnexpectedResponse, ConnectionError) as exc:
-        logger.error("Knowledge base unavailable for session %s: %s", session_id, exc)
+        await asyncio.wait_for(graph.ainvoke(initial_state), timeout=WORKFLOW_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.error("Workflow exceeded %ds for session %s", WORKFLOW_TIMEOUT, session_id)
         await db.execute(
             "UPDATE sessions SET status = 'failed' WHERE id = $1::uuid", session_id
         )

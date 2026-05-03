@@ -9,24 +9,19 @@ from crewai import Agent, LLM
 
 def build_writer() -> Agent:
     llm = LLM(
-        model="anthropic/claude-sonnet-4-6",
+        model="anthropic/claude-haiku-4-5-20251001",
         api_key=os.environ["ANTHROPIC_API_KEY"],
     )
     return Agent(
-        role="Technical Report Writer",
-        goal=(
-            "Synthesise research findings and analytical insights into a well-structured, "
-            "clearly written markdown report. Every section must be grounded in the "
-            "provided sources and cite them inline."
-        ),
+        role="Technical Writer",
+        goal="Synthesise findings into a clear, well-cited markdown report.",
         backstory=(
-            "You are an award-winning technical writer who has authored dozens of research "
-            "reports for Fortune 500 companies and academic journals. You believe that "
-            "excellent writing is invisible — it lets the ideas shine. You never pad content, "
-            "you never make unsupported claims, and your citation style is impeccable."
+            "You write directly from the provided context. "
+            "No tool calls needed — your job is synthesis and clear writing."
         ),
         tools=[],
         llm=llm,
-        verbose=True,
-        max_iter=3,
+        verbose=False,
+        max_iter=2,
+        max_rpm=10,
     )

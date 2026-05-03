@@ -18,8 +18,18 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import logging as _logging
+
     from dotenv import load_dotenv
     load_dotenv()
+
+    os.makedirs("logs", exist_ok=True)
+    file_handler = _logging.FileHandler("logs/api.log")
+    file_handler.setFormatter(
+        _logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    )
+    _logging.getLogger().addHandler(file_handler)
+    _logging.getLogger().setLevel(_logging.INFO)
 
     from src.db import connection as db
     logger.info("Running database migrations")

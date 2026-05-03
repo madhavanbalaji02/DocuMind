@@ -12,20 +12,27 @@ logger = get_logger(__name__)
 
 _CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
+# Module-level CrossEncoder cache — thread-safe after loading.
+_CROSS_ENCODER_CACHE: dict[str, Any] = {}
+
 
 class CrossEncoderReranker:
     """Rerank retrieved chunks using a cross-encoder model."""
 
     def __init__(self, model_name: str = _CROSS_ENCODER_MODEL) -> None:
         self.model_name = model_name
-        self._model: Any = None
+
+    @property
+    def _model(self):
+        return _CROSS_ENCODER_CACHE.get(self.model_name)
 
     def _load_model(self) -> None:
-        if self._model is None:
+        if self.model_name not in _CROSS_ENCODER_CACHE:
             from sentence_transformers import CrossEncoder
 
-            logger.info("Loading CrossEncoder model: %s", self.model_name)
-            self._model = CrossEncoder(self.model_name)
+            logger.info("Loading CrossEncoder model: %s (will cache)", self.model_name)
+            _CROSS_ENCODER_CACHE[self.model_name] = CrossEncoder(self.model_name)
+            logger.info("CrossEncoder model cached")
 
     async def rerank(
         self,
@@ -40,10 +47,11 @@ class CrossEncoderReranker:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._load_model)
 
+        model = _CROSS_ENCODER_CACHE[self.model_name]
         pairs = [[query, chunk.text] for chunk in chunks]
 
         scores: list[float] = await loop.run_in_executor(
-            None, self._model.predict, pairs
+            None, model.predict, pairs
         )
 
         scored = sorted(

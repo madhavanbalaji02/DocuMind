@@ -67,6 +67,12 @@ def _reciprocal_rank_fusion(
     return fused
 
 
+# Module-level BM25 cache keyed by collection name.
+# Building the index requires scrolling all vectors from Qdrant — caching it
+# avoids ~3s rebuild on every tool call from agent threads.
+_BM25_CACHE: dict[str, tuple[list[str], list[str], Any]] = {}
+
+
 class HybridRetriever:
     """Dense + sparse hybrid search with RRF fusion."""
 
@@ -78,14 +84,19 @@ class HybridRetriever:
         )
         self.collection = os.environ.get("QDRANT_COLLECTION", "documind_chunks")
 
-        # BM25 index is built lazily on first query
+        # Use module-level cache; populated on first retrieve call
         self._bm25_corpus: list[str] = []
         self._bm25_chunk_ids: list[str] = []
         self._bm25_index: Any = None
 
     async def _build_bm25_index(self) -> None:
-        """Fetch all chunk texts from Qdrant and build a BM25 index."""
+        """Fetch all chunk texts from Qdrant and build a BM25 index, using cache."""
         from rank_bm25 import BM25Okapi
+
+        if self.collection in _BM25_CACHE:
+            self._bm25_corpus, self._bm25_chunk_ids, self._bm25_index = _BM25_CACHE[self.collection]
+            logger.info("BM25 index loaded from cache (%d docs)", len(self._bm25_corpus))
+            return
 
         logger.info("Building BM25 index from Qdrant collection %r …", self.collection)
         offset = None
@@ -114,7 +125,8 @@ class HybridRetriever:
         self._bm25_chunk_ids = ids
         tokenized = [t.lower().split() for t in texts]
         self._bm25_index = BM25Okapi(tokenized)
-        logger.info("BM25 index built: %d documents", len(texts))
+        _BM25_CACHE[self.collection] = (texts, ids, self._bm25_index)
+        logger.info("BM25 index built and cached: %d documents", len(texts))
 
     async def retrieve(
         self,

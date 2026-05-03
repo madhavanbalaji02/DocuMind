@@ -13,6 +13,10 @@ import numpy as np
 
 logger = get_logger(__name__)
 
+# Module-level cache: SentenceTransformer is thread-safe once loaded.
+# Caching here avoids reloading the model on every tool call from agent threads.
+_MODEL_CACHE: dict[str, Any] = {}
+
 
 class EmbeddingService:
     """Embed texts via local sentence-transformers or remote vLLM endpoint."""
@@ -27,16 +31,17 @@ class EmbeddingService:
             local_model_name = os.environ.get(
                 "LOCAL_EMBED_MODEL", "BAAI/bge-small-en-v1.5"
             )
-            logger.info("Initializing local embedding model: %s", local_model_name)
-            from sentence_transformers import SentenceTransformer
-
-            self._local_model = SentenceTransformer(local_model_name)
-            dim = (
-                self._local_model.get_embedding_dimension()
-                if hasattr(self._local_model, "get_embedding_dimension")
-                else self._local_model.get_sentence_embedding_dimension()
-            )
-            logger.info("Local model loaded (dim=%d)", dim)
+            if local_model_name not in _MODEL_CACHE:
+                logger.info("Loading embedding model: %s", local_model_name)
+                from sentence_transformers import SentenceTransformer
+                _MODEL_CACHE[local_model_name] = SentenceTransformer(local_model_name)
+                dim = (
+                    _MODEL_CACHE[local_model_name].get_embedding_dimension()
+                    if hasattr(_MODEL_CACHE[local_model_name], "get_embedding_dimension")
+                    else _MODEL_CACHE[local_model_name].get_sentence_embedding_dimension()
+                )
+                logger.info("Embedding model cached (dim=%d)", dim)
+            self._local_model = _MODEL_CACHE[local_model_name]
         else:
             self._vllm_url = os.environ["BIGRED200_VLLM_URL"]
             self._embed_model = os.environ.get("BIGRED200_EMBED_MODEL", "BAAI/bge-m3")

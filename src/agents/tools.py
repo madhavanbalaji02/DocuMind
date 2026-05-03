@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from src.core.logging import get_logger
+import os
 import re
 
+import asyncpg
 import httpx
 from crewai.tools import tool
 
-from src.db import connection as db
-from src.rag.rag_chain import RAGChain
+from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -39,57 +39,69 @@ def _run_async(coro):
 
 @tool("search_knowledge_base")
 def search_knowledge_base(query: str) -> str:
-    """Search the document knowledge base using RAG and return an answer with citations.
+    """Search the document knowledge base and return relevant passages with sources.
+
+    Returns the top matching text passages directly — no LLM generation, so it
+    is fast and doesn't consume additional Anthropic API quota.
 
     Args:
         query: The research question or topic to look up.
     """
 
-    async def _query():
-        rag = RAGChain()
+    async def _retrieve():
+        from src.rag.retriever import HybridRetriever
+        retriever = HybridRetriever()
         try:
-            response = await rag.query(query, session_id="00000000-0000-0000-0000-000000000002")
-            lines = [response.answer, "", "**Citations:**"]
-            for i, src in enumerate(response.sources, start=1):
-                lines.append(f"[{i}] {src.source} — {src.excerpt[:120]}")
-            return "\n".join(lines)
+            chunks = await retriever.retrieve(query, top_k=5)
+            if not chunks:
+                return "No relevant documents found in the knowledge base."
+            parts = []
+            for i, chunk in enumerate(chunks, 1):
+                parts.append(f"[{i}] Source: {chunk.source}\n{chunk.text[:600]}")
+            return "\n\n---\n\n".join(parts)
         finally:
-            await rag.close()
+            await retriever.close()
 
-    return _run_async(_query())
+    return _run_async(_retrieve())
 
 
 @tool("search_web")
 def search_web(query: str) -> str:
     """Search the web for current information on a topic.
 
+    Uses synchronous httpx with a hard 8-second timeout — safe to call from
+    any thread context without event-loop complications.
+
     Args:
         query: The search query string.
     """
+    try:
+        with httpx.Client(timeout=8.0, follow_redirects=True) as client:
+            resp = client.get(
+                "https://api.duckduckgo.com/",
+                params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.TimeoutException:
+        return f"Web search timed out for '{query}'. Using knowledge base only."
+    except Exception as exc:
+        logger.warning("Web search failed: %s", exc)
+        return f"Web search unavailable: {exc}. Using knowledge base only."
 
-    async def _search():
-        url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            try:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                data = resp.json()
-            except Exception as exc:
-                logger.warning("DuckDuckGo search failed: %s", exc)
-                return f"Web search unavailable: {exc}"
+    results: list[str] = []
+    if data.get("AbstractText"):
+        results.append(f"**Summary:** {data['AbstractText']}\nSource: {data.get('AbstractURL', '')}")
+    for item in data.get("RelatedTopics", [])[:3]:
+        if isinstance(item, dict) and item.get("Text"):
+            results.append(f"- {item['Text']}")
+    return "\n\n".join(results) if results else f"No web results for '{query}'."
 
-        results: list[str] = []
 
-        if data.get("AbstractText"):
-            results.append(f"**Summary:** {data['AbstractText']}\nSource: {data.get('AbstractURL', '')}")
-
-        for item in data.get("RelatedTopics", [])[:3]:
-            if isinstance(item, dict) and item.get("Text"):
-                results.append(f"- {item['Text']}")
-
-        return "\n\n".join(results) if results else "No web results found."
-
-    return _run_async(_search())
+def _thread_db_dsn() -> str:
+    return os.environ.get("DATABASE_URL_ASYNC", "").replace(
+        "postgresql+asyncpg://", "postgresql://"
+    )
 
 
 @tool("query_database")
@@ -103,10 +115,18 @@ def query_database(sql: str) -> str:
         return "Error: only SELECT queries are permitted."
 
     async def _query():
+        # Use a direct connection — pool is bound to the FastAPI event loop
+        # and cannot be safely used from a thread's asyncio.run() context.
         try:
-            rows = await db.fetch(sql)
+            conn = await asyncpg.connect(_thread_db_dsn(), ssl=False)
+        except Exception as exc:
+            return f"Database connection failed: {exc}"
+        try:
+            rows = await conn.fetch(sql)
         except Exception as exc:
             return f"SQL error: {exc}"
+        finally:
+            await conn.close()
 
         if not rows:
             return "Query returned no rows."
@@ -130,22 +150,31 @@ def get_past_reports(topic: str) -> str:
     """
 
     async def _fetch():
-        rows = await db.fetch(
-            """
-            SELECT s.topic, r.title, r.quality_score, r.word_count,
-                   LEFT(r.content, 400) AS preview
-            FROM reports r
-            JOIN sessions s ON s.id = r.session_id
-            WHERE s.status = 'completed'
-              AND (
-                s.topic ILIKE $1
-                OR r.title ILIKE $1
-              )
-            ORDER BY r.created_at DESC
-            LIMIT 3
-            """,
-            f"%{topic}%",
-        )
+        try:
+            conn = await asyncpg.connect(_thread_db_dsn(), ssl=False)
+        except Exception as exc:
+            return f"Database connection failed: {exc}"
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT s.topic, r.title, r.quality_score, r.word_count,
+                       LEFT(r.content, 400) AS preview
+                FROM reports r
+                JOIN sessions s ON s.id = r.session_id
+                WHERE s.status = 'completed'
+                  AND (
+                    s.topic ILIKE $1
+                    OR r.title ILIKE $1
+                  )
+                ORDER BY r.created_at DESC
+                LIMIT 3
+                """,
+                f"%{topic}%",
+            )
+        except Exception as exc:
+            return f"SQL error: {exc}"
+        finally:
+            await conn.close()
         if not rows:
             return f"No past reports found matching topic: {topic!r}"
         parts = []

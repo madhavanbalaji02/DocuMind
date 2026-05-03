@@ -18,6 +18,8 @@ from src.db import connection as db
 
 logger = get_logger(__name__)
 
+CREW_TIMEOUT_SECONDS = 240  # 4-minute hard cap on the full crew run
+
 
 @dataclass
 class Citation:
@@ -31,6 +33,7 @@ class CrewResult:
     draft_report: str
     citations: list[Citation] = field(default_factory=list)
     agent_run_ids: list[str] = field(default_factory=list)
+    error: str | None = None
 
 
 class ResearchCrew:
@@ -44,36 +47,30 @@ class ResearchCrew:
     def _build_tasks(self, topic: str, context: str) -> list[Task]:
         research_task = Task(
             description=(
-                f"Research the following topic comprehensively:\n\n**Topic:** {topic}\n\n"
-                f"**Knowledge base context:**\n{context[:3000]}\n\n"
-                f"Use search_knowledge_base to find additional relevant information. "
-                f"Supplement with web searches for recent developments. "
-                f"Cover history, mechanisms, current state, and open questions."
+                f"Research this topic: {topic}\n\n"
+                f"Context from knowledge base:\n{context[:2000]}\n\n"
+                f"Use search_knowledge_base once or twice for the most relevant angles. "
+                f"Be concise and focused — do not make more than 3 tool calls total."
             ),
             expected_output=(
-                "A structured research summary with:\n"
-                "(1) Direct answers to each aspect of the research topic\n"
-                "(2) Key facts with source citations in [source: URL] format\n"
-                "(3) Conflicting viewpoints or open debates, if any\n"
-                "(4) Quantitative data and statistics where available\n"
-                "Minimum 400 words. Every claim must cite a source."
+                "Research summary (300-500 words) with:\n"
+                "1. Key facts with [source: URL] citations\n"
+                "2. Main mechanisms or concepts explained\n"
+                "3. Practical applications or significance"
             ),
             agent=self.researcher,
         )
 
         analysis_task = Task(
             description=(
-                f"Analyse the research findings for: {topic}\n\n"
-                f"Query the database for related past reports using query_database. "
-                f"Identify patterns, contradictions, and evidence gaps."
+                f"Analyse findings for: {topic}\n\n"
+                f"Identify 3-5 key insights. Be analytical and concise."
             ),
             expected_output=(
-                "A data analysis section with:\n"
-                "(1) Quantitative findings (numbers, percentages, dates)\n"
-                "(2) Comparison tables in markdown where applicable\n"
-                "(3) Statistical context and trend analysis\n"
-                "(4) Confidence assessment for major claims: High/Medium/Low\n"
-                "Format as markdown with ## headers."
+                "Analysis section (200-300 words) with:\n"
+                "1. Key patterns and trends\n"
+                "2. Comparative context\n"
+                "3. Confidence assessment (High/Medium/Low) for major claims"
             ),
             agent=self.analyst,
             context=[research_task],
@@ -81,20 +78,14 @@ class ResearchCrew:
 
         writing_task = Task(
             description=(
-                f"Write a comprehensive research report on: {topic}\n\n"
-                f"Synthesise the researcher's and analyst's output. "
-                f"Every factual claim must carry an inline [N] citation. "
-                f"The report must be self-contained and publication-ready."
+                f"Write a complete research report on: {topic}\n\n"
+                f"Use researcher and analyst findings. Every claim needs a citation."
             ),
             expected_output=(
-                "A complete markdown research report:\n\n"
-                "# [Descriptive Title]\n\n"
-                "## Executive Summary\n(100-150 words)\n\n"
-                "## Key Findings\n(bullets with [N] citations)\n\n"
-                "## Detailed Analysis\n(4+ paragraphs, citations, data)\n\n"
-                "## Conclusion\n(synthesis and implications)\n\n"
-                "## References\n([N] full source URL or title)\n\n"
-                "Minimum 800 words total."
+                "Complete markdown report:\n"
+                "# Title\n## Executive Summary\n## Key Findings\n"
+                "## Analysis\n## Conclusion\n## References\n"
+                "Minimum 600 words. All claims cited [N]."
             ),
             agent=self.writer,
             context=[research_task, analysis_task],
@@ -102,17 +93,13 @@ class ResearchCrew:
 
         critique_task = Task(
             description=(
-                f"Review the draft report on '{topic}' for accuracy and completeness.\n\n"
-                f"Verify every claim against source material. "
-                f"Flag unsupported assertions, logical gaps, and missing citations."
+                f"Review the draft report on '{topic}' for accuracy.\n"
+                f"Check claims against sources. Be specific and brief."
             ),
             expected_output=(
-                "VERDICT: PASS or FAIL\n"
-                "SCORE: X/10\n\n"
-                "ISSUES:\n1. [specific problem]\n\n"
-                "SUGGESTIONS:\n1. [actionable fix]\n\n"
-                "CITATION CHECK: confirm all claims cite sources, or list missing ones.\n\n"
-                "If PASS: state that all major claims are supported by provided sources."
+                "VERDICT: PASS or FAIL\nSCORE: X/10\n"
+                "ISSUES: (numbered, or 'None')\n"
+                "SUGGESTIONS: (numbered, or 'None')"
             ),
             agent=self.critic,
             context=[writing_task],
@@ -120,46 +107,66 @@ class ResearchCrew:
 
         return [research_task, analysis_task, writing_task, critique_task]
 
-    async def run(self, topic: str, context: str, session_id: str) -> CrewResult:
-        logger.info("ResearchCrew starting session=%s topic=%r", session_id, topic)
+    def _kickoff_sync(self, topic: str, context: str) -> str:
+        """Run crew.kickoff() synchronously — called from run_in_executor."""
         tasks = self._build_tasks(topic, context)
-
         crew = Crew(
             agents=[self.researcher, self.analyst, self.writer, self.critic],
             tasks=tasks,
             process=Process.sequential,
-            verbose=True,
+            verbose=False,  # reduce noise
         )
+        crew.kickoff()
+        return str(tasks[2].output) if tasks[2].output else "Report generation incomplete."
 
-        t_start = asyncio.get_event_loop().time()
+    async def run(self, topic: str, context: str, session_id: str) -> CrewResult:
+        logger.info("ResearchCrew starting session=%s", session_id)
         loop = asyncio.get_event_loop()
-        crew_output = await loop.run_in_executor(None, crew.kickoff)
-        elapsed_ms = int((asyncio.get_event_loop().time() - t_start) * 1000)
 
-        draft_report = str(tasks[2].output) if tasks[2].output else str(crew_output)
+        try:
+            draft_report = await asyncio.wait_for(
+                loop.run_in_executor(None, self._kickoff_sync, topic, context),
+                timeout=CREW_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "ResearchCrew TIMED OUT after %ds session=%s",
+                CREW_TIMEOUT_SECONDS, session_id,
+            )
+            return CrewResult(
+                draft_report=(
+                    f"# Research Report: {topic}\n\n"
+                    "## Note\n\nThe multi-agent research workflow reached its time limit. "
+                    "The retrieved context below represents the best available information.\n\n"
+                    f"*Topic: {topic}*\n\n*Context collected:* {context[:1000]}"
+                ),
+                error="crew_timeout",
+            )
+        except Exception as exc:
+            logger.error("ResearchCrew failed session=%s: %s", session_id, exc)
+            return CrewResult(
+                draft_report=f"# Research: {topic}\n\nAgent execution encountered an error: {exc}",
+                error=str(exc),
+            )
 
+        # Persist agent runs
         agent_run_ids: list[str] = []
-        agent_names = ["researcher", "analyst", "writer", "critic"]
-        for task, name in zip(tasks, agent_names):
+        for name in ["researcher", "analyst", "writer", "critic"]:
             run_id = str(uuid.uuid4())
             agent_run_ids.append(run_id)
-            output_text = str(task.output) if task.output else ""
             try:
                 await db.execute(
                     """
                     INSERT INTO agent_runs
-                        (id, session_id, agent_name, input, output, duration_ms, created_at)
-                    VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)
+                        (id, session_id, agent_name, input, output, created_at)
+                    VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6)
                     """,
                     run_id, session_id, name, topic,
-                    output_text[:10000], elapsed_ms // 4,
+                    draft_report[:5000] if name == "writer" else "",
                     datetime.now(timezone.utc),
                 )
             except Exception as exc:
-                logger.warning("Failed to save agent_run %s: %s", name, exc)
+                logger.warning("agent_run save failed %s: %s", name, exc)
 
-        logger.info(
-            "ResearchCrew complete session=%s elapsed_ms=%d draft_len=%d",
-            session_id, elapsed_ms, len(draft_report),
-        )
+        logger.info("ResearchCrew complete session=%s", session_id)
         return CrewResult(draft_report=draft_report, agent_run_ids=agent_run_ids)

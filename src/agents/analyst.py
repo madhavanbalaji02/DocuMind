@@ -11,24 +11,19 @@ from src.agents.tools import query_database, search_knowledge_base
 
 def build_analyst() -> Agent:
     llm = LLM(
-        model="anthropic/claude-sonnet-4-6",
+        model="anthropic/claude-haiku-4-5-20251001",
         api_key=os.environ["ANTHROPIC_API_KEY"],
     )
     return Agent(
         role="Data Analyst",
-        goal=(
-            "Analyse structured data from the database and extracted knowledge to identify "
-            "patterns, trends, and quantitative insights. Translate raw data into "
-            "actionable analytical findings."
-        ),
+        goal="Analyse the research findings and surface key insights.",
         backstory=(
-            "You are a precision-focused data analyst who spent a decade turning messy "
-            "datasets into clear narratives. You write SQL fluently, spot anomalies "
-            "immediately, and always quantify your claims. You trust data over opinion "
-            "and will push back when assertions lack numerical backing."
+            "You are a concise analyst. You make at most 2 tool calls, "
+            "then provide a focused analytical summary with confidence ratings."
         ),
         tools=[query_database, search_knowledge_base],
         llm=llm,
-        verbose=True,
-        max_iter=4,
+        verbose=False,
+        max_iter=3,
+        max_rpm=10,
     )

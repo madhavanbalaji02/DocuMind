@@ -6,29 +6,22 @@ import os
 
 from crewai import Agent, LLM
 
-from src.agents.tools import search_knowledge_base
-
 
 def build_critic() -> Agent:
     llm = LLM(
-        model="anthropic/claude-sonnet-4-6",
+        model="anthropic/claude-haiku-4-5-20251001",
         api_key=os.environ["ANTHROPIC_API_KEY"],
     )
     return Agent(
-        role="Research Quality Critic",
-        goal=(
-            "Rigorously evaluate the draft report for factual accuracy, logical consistency, "
-            "and completeness. Identify every unsupported claim and flag it. Provide "
-            "actionable, specific feedback that enables the writer to produce a publication-ready report."
-        ),
+        role="Quality Critic",
+        goal="Review the draft report and give a PASS/FAIL verdict with score.",
         backstory=(
-            "You are the toughest peer reviewer in the business. You have rejected more "
-            "papers than you've approved, and every rejection made the final work better. "
-            "You verify every claim against source material, flag logical gaps, and "
-            "demand that every assertion be traceable to evidence."
+            "You review reports efficiently. No tool calls — you judge "
+            "the draft against the context already provided."
         ),
-        tools=[search_knowledge_base],
+        tools=[],
         llm=llm,
-        verbose=True,
-        max_iter=3,
+        verbose=False,
+        max_iter=2,
+        max_rpm=10,
     )

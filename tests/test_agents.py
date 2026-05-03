@@ -10,58 +10,50 @@ import pytest
 # ── search_knowledge_base tool ────────────────────────────────────────────────
 
 class TestSearchKnowledgeBaseTool:
-    def test_returns_formatted_answer_with_citations(self):
-        from src.rag.rag_chain import Citation, RAGResponse
+    def test_returns_formatted_passages(self):
         from src.rag.retriever import RetrievedChunk
 
-        mock_response = RAGResponse(
-            answer="Transformers use self-attention mechanisms.",
-            sources=[
-                Citation(
-                    source="attention_paper.pdf",
-                    chunk_id="abc",
-                    relevance_score=0.95,
-                    excerpt="Self-attention allows the model to weigh…",
-                )
-            ],
-            retrieved_chunks=[],
-            confidence=0.9,
-        )
+        mock_chunks = [
+            RetrievedChunk(
+                chunk_id="abc",
+                text="Transformers use self-attention mechanisms to process sequences.",
+                source="attention_paper.pdf",
+                score=0.95,
+                rank=1,
+            )
+        ]
 
-        async def mock_query(*args, **kwargs):
-            return mock_response
+        async def mock_retrieve(*args, **kwargs):
+            return mock_chunks
 
         async def mock_close():
             pass
 
-        # RAGChain is imported at module level in tools.py so patch there
-        with patch("src.agents.tools.RAGChain") as mock_cls:
-            mock_rag = MagicMock()
-            mock_rag.query = mock_query
-            mock_rag.close = mock_close
-            mock_cls.return_value = mock_rag
+        # search_knowledge_base lazy-imports HybridRetriever — patch at source module
+        with patch("src.rag.retriever.HybridRetriever") as mock_cls:
+            mock_retriever = MagicMock()
+            mock_retriever.retrieve = mock_retrieve
+            mock_retriever.close = mock_close
+            mock_cls.return_value = mock_retriever
 
             from src.agents.tools import search_knowledge_base
-
-            # CrewAI @tool wraps function in Tool object; call via .run()
             result = search_knowledge_base.run("How do transformers work?")
 
         assert "Transformers use self-attention" in result
         assert "attention_paper.pdf" in result
-        assert "Citations" in result
 
-    def test_propagates_rag_exception(self):
-        async def mock_query(*args, **kwargs):
+    def test_propagates_retriever_exception(self):
+        async def mock_retrieve(*args, **kwargs):
             raise RuntimeError("Qdrant unavailable")
 
         async def mock_close():
             pass
 
-        with patch("src.agents.tools.RAGChain") as mock_cls:
-            mock_rag = MagicMock()
-            mock_rag.query = mock_query
-            mock_rag.close = mock_close
-            mock_cls.return_value = mock_rag
+        with patch("src.rag.retriever.HybridRetriever") as mock_cls:
+            mock_retriever = MagicMock()
+            mock_retriever.retrieve = mock_retrieve
+            mock_retriever.close = mock_close
+            mock_cls.return_value = mock_retriever
 
             from src.agents.tools import search_knowledge_base
 
@@ -87,15 +79,15 @@ class TestQueryDatabaseTool:
             "id": "abc", "topic": "AI", "status": "done"
         }[key]
 
-        async def mock_fetch(*args, **kwargs):
-            return [mock_row]
+        mock_conn = MagicMock()
+        mock_conn.fetch = AsyncMock(return_value=[mock_row])
+        mock_conn.close = AsyncMock()
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=None)
 
-        # db is imported at module level in tools.py as `from src.db import connection as db`
-        with patch("src.agents.tools.db") as mock_db:
-            mock_db.fetch = mock_fetch
-
+        # tools.py now uses asyncpg.connect() directly (pool is event-loop bound)
+        with patch("src.agents.tools.asyncpg.connect", new=AsyncMock(return_value=mock_conn)):
             from src.agents.tools import query_database
-
             result = query_database.run("SELECT id, topic, status FROM sessions LIMIT 1")
 
         assert "|" in result
@@ -103,14 +95,12 @@ class TestQueryDatabaseTool:
         assert "topic" in result
 
     def test_returns_message_for_empty_result(self):
-        async def mock_fetch(*args, **kwargs):
-            return []
+        mock_conn = MagicMock()
+        mock_conn.fetch = AsyncMock(return_value=[])
+        mock_conn.close = AsyncMock()
 
-        with patch("src.agents.tools.db") as mock_db:
-            mock_db.fetch = mock_fetch
-
+        with patch("src.agents.tools.asyncpg.connect", new=AsyncMock(return_value=mock_conn)):
             from src.agents.tools import query_database
-
             result = query_database.run("SELECT * FROM sessions WHERE 1=0")
 
         assert "no rows" in result.lower()
@@ -120,14 +110,12 @@ class TestQueryDatabaseTool:
 
 class TestGetPastReportsTool:
     def test_returns_no_results_message_when_empty(self):
-        async def mock_fetch(*args, **kwargs):
-            return []
+        mock_conn = MagicMock()
+        mock_conn.fetch = AsyncMock(return_value=[])
+        mock_conn.close = AsyncMock()
 
-        with patch("src.agents.tools.db") as mock_db:
-            mock_db.fetch = mock_fetch
-
+        with patch("src.agents.tools.asyncpg.connect", new=AsyncMock(return_value=mock_conn)):
             from src.agents.tools import get_past_reports
-
             result = get_past_reports.run("quantum computing")
 
         assert "No past reports" in result
@@ -146,14 +134,12 @@ class TestGetPastReportsTool:
             }[key]
             mock_rows.append(row)
 
-        async def mock_fetch(*args, **kwargs):
-            return mock_rows
+        mock_conn = MagicMock()
+        mock_conn.fetch = AsyncMock(return_value=mock_rows)
+        mock_conn.close = AsyncMock()
 
-        with patch("src.agents.tools.db") as mock_db:
-            mock_db.fetch = mock_fetch
-
+        with patch("src.agents.tools.asyncpg.connect", new=AsyncMock(return_value=mock_conn)):
             from src.agents.tools import get_past_reports
-
             result = get_past_reports.run("AI research")
 
         assert "Report 0" in result
@@ -164,20 +150,15 @@ class TestGetPastReportsTool:
 
 class TestSearchWebTool:
     def test_handles_network_error_gracefully(self):
-        # httpx is imported at module level in tools.py, so patch there
-        with patch("src.agents.tools.httpx.AsyncClient") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-
-            async def mock_get(*args, **kwargs):
-                raise Exception("Connection refused")
-
-            mock_client.get = mock_get
-            mock_client_cls.return_value = mock_client
+        # search_web now uses synchronous httpx.Client — patch Client not AsyncClient
+        with patch("src.agents.tools.httpx.Client") as mock_client_cls:
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=None)
+            mock_ctx.get = MagicMock(side_effect=Exception("Connection refused"))
+            mock_client_cls.return_value = mock_ctx
 
             from src.agents.tools import search_web
-
             result = search_web.run("transformer models")
 
         assert isinstance(result, str)
@@ -195,18 +176,14 @@ class TestSearchWebTool:
             ],
         }
 
-        async def mock_get(*args, **kwargs):
-            return mock_response
-
-        with patch("src.agents.tools.httpx.AsyncClient") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client.get = mock_get
-            mock_client_cls.return_value = mock_client
+        with patch("src.agents.tools.httpx.Client") as mock_client_cls:
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=None)
+            mock_ctx.get = MagicMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_ctx
 
             from src.agents.tools import search_web
-
             result = search_web.run("transformer neural networks")
 
         assert "Transformers are neural network" in result
@@ -217,31 +194,19 @@ class TestSearchWebTool:
 class TestResearchCrew:
     @pytest.mark.asyncio
     async def test_crew_run_persists_agent_runs(self):
-        mock_task_output = MagicMock()
-        mock_task_output.__str__ = lambda self: "Task output text"
-
         with patch("src.agents.crew.build_researcher"), \
              patch("src.agents.crew.build_analyst"), \
              patch("src.agents.crew.build_writer"), \
              patch("src.agents.crew.build_critic"), \
-             patch("src.agents.crew.Crew") as mock_crew_cls, \
              patch("src.agents.crew.db") as mock_db:
 
             mock_db.execute = AsyncMock()
 
-            mock_crew = MagicMock()
-            mock_crew.kickoff = MagicMock(return_value="Final crew output")
-            mock_crew_cls.return_value = mock_crew
-
             from src.agents.crew import ResearchCrew
-
             crew = ResearchCrew()
 
-            with patch.object(crew, "_build_tasks") as mock_build:
-                task1 = MagicMock()
-                task1.output = mock_task_output
-                mock_build.return_value = [task1, task1, task1, task1]
-
+            # _kickoff_sync now returns a string directly
+            with patch.object(crew, "_kickoff_sync", return_value="# Writer report output"):
                 result = await crew.run(
                     topic="Test topic",
                     context="Some context",
@@ -256,29 +221,15 @@ class TestResearchCrew:
              patch("src.agents.crew.build_analyst"), \
              patch("src.agents.crew.build_writer"), \
              patch("src.agents.crew.build_critic"), \
-             patch("src.agents.crew.Crew") as mock_crew_cls, \
              patch("src.agents.crew.db") as mock_db:
 
             mock_db.execute = AsyncMock()
 
-            mock_crew = MagicMock()
-            mock_crew.kickoff = MagicMock(return_value="# Research Report\n\nContent here.")
-            mock_crew_cls.return_value = mock_crew
-
             from src.agents.crew import ResearchCrew
-
             crew = ResearchCrew()
 
-            writer_task = MagicMock()
-            writer_task.output = MagicMock()
-            writer_task.output.__str__ = lambda self: "# Report\n\nFull content."
-
-            with patch.object(crew, "_build_tasks") as mock_build:
-                tasks = [MagicMock() for _ in range(4)]
-                tasks[2] = writer_task
-                mock_build.return_value = tasks
-
+            with patch.object(crew, "_kickoff_sync", return_value="# Report\n\nFull content."):
                 result = await crew.run("topic", "context", "session-id")
 
             assert result.draft_report
-            assert len(result.draft_report) > 0
+            assert "Report" in result.draft_report
