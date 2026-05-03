@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from src.core.logging import get_logger
 
 from dotenv import load_dotenv
 from mcp.server import Server
@@ -12,8 +12,7 @@ from mcp.types import Tool
 
 from src.mcp_server.tools import TOOLS, dispatch
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def _run() -> None:

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from src.core.logging import get_logger
 from typing import Any
 
 from src.rag.retriever import RetrievedChunk
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import logging
+from src.core.logging import get_logger
 
 from mcp.types import TextContent, Tool
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
@@ -88,7 +88,7 @@ async def _search_knowledge_base(query: str, top_k: int = 5) -> str:
 
     rag = RAGChain(top_k_retrieve=top_k, top_n_rerank=min(top_k, 5))
     try:
-        response = await rag.query(query, session_id="mcp_tool")
+        response = await rag.query(query, session_id="00000000-0000-0000-0000-000000000001")
         lines = [
             response.answer,
             "",

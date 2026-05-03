@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-import logging
+from src.core.logging import get_logger
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _PAGE_RE = re.compile(r"\[Page (\d+)\]")
 

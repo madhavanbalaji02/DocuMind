@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import logging
+from src.core.logging import get_logger
 import os
 
 import httpx
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class BigRed200Client:

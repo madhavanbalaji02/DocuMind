@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from src.core.logging import get_logger
 import re
 
 import httpx
@@ -12,7 +12,7 @@ from crewai.tools import tool
 from src.db import connection as db
 from src.rag.rag_chain import RAGChain
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _SELECT_ONLY = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 
@@ -48,7 +48,7 @@ def search_knowledge_base(query: str) -> str:
     async def _query():
         rag = RAGChain()
         try:
-            response = await rag.query(query, session_id="tool_call")
+            response = await rag.query(query, session_id="00000000-0000-0000-0000-000000000002")
             lines = [response.answer, "", "**Citations:**"]
             for i, src in enumerate(response.sources, start=1):
                 lines.append(f"[{i}] {src.source} — {src.excerpt[:120]}")

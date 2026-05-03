@@ -258,12 +258,12 @@ Run `python scripts/benchmark.py` to regenerate these numbers on your hardware.
 
 | Metric | Local (bge-small, M-series Mac) | BigRed200 (bge-m3, A100) |
 |---|---|---|
-| Embedding throughput | 1,077 texts/sec | TBD |
-| Embed latency p50 | 6.0 ms | TBD |
-| Embed latency p95 | 19.2 ms | TBD |
-| RAG retrieve p50 | 6.3 ms | TBD |
-| RAG retrieve p95 | 24.3 ms | TBD |
-| End-to-end research | ~3–5 min | TBD |
+| Embedding throughput | 167 texts/sec (M-series Mac) | TBD |
+| Embed latency p50 | 9.4 ms | TBD |
+| Embed latency p95 | 28.1 ms | TBD |
+| RAG retrieve p50 | 15.2 ms | TBD |
+| RAG retrieve p95 | 357.2 ms (BM25 cold start) | TBD |
+| End-to-end research | ~10–20 min (4-agent CrewAI) | TBD |
 
 *BigRed200 numbers: fill in after running `jobs/embed_batch.slurm`.*
 

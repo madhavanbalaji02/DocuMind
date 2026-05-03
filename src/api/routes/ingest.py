@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import logging
+from src.core.logging import get_logger
 import os
 import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 router = APIRouter()
 
 

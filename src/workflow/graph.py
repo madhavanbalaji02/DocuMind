@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from src.core.logging import get_logger
 
 from langgraph.graph import END, START, StateGraph
 
@@ -18,7 +18,7 @@ from src.workflow.nodes import (
 )
 from src.workflow.state import ResearchState
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 MAX_ITERATIONS = 2
 

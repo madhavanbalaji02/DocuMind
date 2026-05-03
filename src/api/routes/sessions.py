@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import logging
+from src.core.logging import get_logger
 
 from fastapi import APIRouter, HTTPException
 
 from src.db import connection as db
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 router = APIRouter()
 
 

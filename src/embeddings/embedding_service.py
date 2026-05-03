@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from src.core.logging import get_logger
 import os
 import time
 from typing import Any
@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 import numpy as np
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EmbeddingService:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from src.core.logging import get_logger
 import os
 import uuid
 from datetime import datetime, timezone
@@ -14,7 +14,7 @@ from src.db import connection as db
 from src.rag.rag_chain import RAGChain
 from src.workflow.state import ResearchState
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _LLM_MODEL = "claude-haiku-4-5-20251001"
 
@@ -24,8 +24,32 @@ def _anthropic_client() -> anthropic.AsyncAnthropic:
 
 
 async def plan_research(state: ResearchState) -> dict:
-    """Generate 3-5 specific research questions from the topic."""
+    """Generate 4 focused research questions, injecting prior context if available."""
     logger.info("[plan_research] session=%s topic=%r", state["session_id"], state["topic"])
+
+    # Check for prior research on this topic
+    prior_rows = await db.fetch(
+        """
+        SELECT r.title, LEFT(r.content, 800) AS preview
+        FROM reports r
+        JOIN sessions s ON s.id = r.session_id
+        WHERE s.status = 'completed'
+          AND s.id::text != $1
+          AND (s.topic ILIKE $2 OR r.title ILIKE $2)
+        ORDER BY r.created_at DESC
+        LIMIT 2
+        """,
+        state["session_id"],
+        f"%{state['topic'][:60]}%",
+    )
+
+    prior_context_section = ""
+    if prior_rows:
+        summaries = "\n".join(f"- {r['title']}: {r['preview'][:300]}" for r in prior_rows)
+        prior_context_section = (
+            f"\n\nPrior research context (do NOT repeat — build on it):\n{summaries}"
+        )
+
     client = _anthropic_client()
     response = await client.messages.create(
         model=_LLM_MODEL,
@@ -36,7 +60,9 @@ async def plan_research(state: ResearchState) -> dict:
                 "content": (
                     f"You are a research planner. Given the topic below, produce exactly 4 "
                     f"focused research questions that together would fully cover the topic. "
-                    f"Output ONLY a JSON array of strings, no extra text.\n\nTopic: {state['topic']}"
+                    f"Output ONLY a JSON array of strings, no extra text."
+                    f"{prior_context_section}"
+                    f"\n\nTopic: {state['topic']}"
                 ),
             }
         ],

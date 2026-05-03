@@ -33,6 +33,7 @@ def _base_state(**overrides) -> ResearchState:
 class TestPlanResearchNode:
     @pytest.mark.asyncio
     async def test_returns_list_of_questions(self):
+        import json
         from src.workflow.nodes import plan_research
 
         questions = [
@@ -42,16 +43,16 @@ class TestPlanResearchNode:
             "What are recent Transformer variants?",
         ]
         mock_message = MagicMock()
-        mock_message.content = [MagicMock(text=str(questions).replace("'", '"'))]
+        mock_message.content = [MagicMock(text=json.dumps(questions))]
 
-        with patch("anthropic.AsyncAnthropic") as mock_cls:
+        with patch("anthropic.AsyncAnthropic") as mock_cls, \
+             patch("src.workflow.nodes.db") as mock_db:
+            mock_db.fetch = AsyncMock(return_value=[])
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_message)
             mock_cls.return_value = mock_client
 
             with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
-                import json
-                mock_message.content[0].text = json.dumps(questions)
                 result = await plan_research(_base_state())
 
         assert "research_plan" in result
@@ -60,15 +61,16 @@ class TestPlanResearchNode:
 
     @pytest.mark.asyncio
     async def test_status_updated_after_planning(self):
+        import json
         from src.workflow.nodes import plan_research
 
         questions = ["Q1", "Q2", "Q3", "Q4"]
-        import json
-
         mock_message = MagicMock()
         mock_message.content = [MagicMock(text=json.dumps(questions))]
 
-        with patch("anthropic.AsyncAnthropic") as mock_cls:
+        with patch("anthropic.AsyncAnthropic") as mock_cls, \
+             patch("src.workflow.nodes.db") as mock_db:
+            mock_db.fetch = AsyncMock(return_value=[])
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_message)
             mock_cls.return_value = mock_client

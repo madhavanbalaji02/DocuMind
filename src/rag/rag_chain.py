@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from src.core.logging import get_logger
 import os
 from dataclasses import dataclass, field
 
@@ -11,7 +11,7 @@ import anthropic
 from src.rag.retriever import HybridRetriever, RetrievedChunk
 from src.rag.reranker import CrossEncoderReranker
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _SYSTEM_PROMPT = """You are a research assistant. Answer the user's question using ONLY the provided context passages.
 

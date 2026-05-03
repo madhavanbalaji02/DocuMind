@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from src.core.logging import get_logger
 import os
 import uuid
 from dataclasses import dataclass
@@ -13,7 +13,7 @@ from qdrant_client import AsyncQdrantClient
 from src.db import connection as db
 from src.embeddings.embedding_service import EmbeddingService
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 RRF_K = 60  # constant in Reciprocal Rank Fusion
 
@@ -124,11 +124,11 @@ class HybridRetriever:
         score_threshold: float = 0.5,
     ) -> list[RetrievedChunk]:
         """Hybrid retrieval returning top_k fused chunks."""
-        # Dense search
+        # Dense search — qdrant-client >= 1.7 uses query_points() not search()
         query_vector = await self.embedder.embed_query(query)
-        qdrant_results = await self.qdrant.search(
+        qr = await self.qdrant.query_points(
             collection_name=self.collection,
-            query_vector=query_vector,
+            query=query_vector,
             limit=top_k * 2,
             score_threshold=score_threshold,
             with_payload=True,
@@ -136,13 +136,13 @@ class HybridRetriever:
         dense_chunks = [
             RetrievedChunk(
                 chunk_id=str(r.id),
-                text=r.payload.get("text", ""),
-                source=r.payload.get("source", ""),
+                text=(r.payload or {}).get("text", ""),
+                source=(r.payload or {}).get("source", ""),
                 score=r.score,
                 rank=idx + 1,
                 metadata=r.payload,
             )
-            for idx, r in enumerate(qdrant_results)
+            for idx, r in enumerate(qr.points)
         ]
 
         # Sparse BM25 search
@@ -184,22 +184,36 @@ class HybridRetriever:
     async def _save_retrievals(
         self, session_id: str, query: str, chunks: list[RetrievedChunk]
     ) -> None:
-        """Persist retrieval records to postgres for audit/analysis."""
+        """Persist retrieval records to postgres for audit/analysis.
+
+        Non-fatal: skips silently if session_id is not a valid UUID or the
+        session row does not exist (e.g. tool calls, smoke tests).
+        """
+        import re
+        _UUID_RE = re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+        )
+        if not _UUID_RE.match(session_id):
+            return
+
         for chunk in chunks:
-            await db.execute(
-                """
-                INSERT INTO retrievals
-                    (id, session_id, query, chunk_id, document_source, relevance_score, content_preview)
-                VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)
-                """,
-                str(uuid.uuid4()),
-                session_id,
-                query,
-                chunk.chunk_id,
-                chunk.source,
-                chunk.score,
-                chunk.text[:500],
-            )
+            try:
+                await db.execute(
+                    """
+                    INSERT INTO retrievals
+                        (id, session_id, query, chunk_id, document_source, relevance_score, content_preview)
+                    VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)
+                    """,
+                    str(uuid.uuid4()),
+                    session_id,
+                    query,
+                    chunk.chunk_id,
+                    chunk.source,
+                    chunk.score,
+                    chunk.text[:500],
+                )
+            except Exception as exc:
+                logger.debug("Skipping retrieval audit log for session %s: %s", session_id, exc)
 
     async def close(self) -> None:
         await self.qdrant.close()

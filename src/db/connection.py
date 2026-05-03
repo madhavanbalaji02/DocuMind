@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from src.core.logging import get_logger
 import os
 from pathlib import Path
 from typing import Any
@@ -10,7 +10,7 @@ from typing import Any
 import asyncpg
 from asyncpg import Pool, Record
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _pool: Pool | None = None
 
@@ -27,6 +27,7 @@ async def get_pool() -> Pool:
             min_size=2,
             max_size=10,
             command_timeout=60,
+            ssl=False,
             server_settings={"application_name": "documind"},
         )
         logger.info("asyncpg pool created (min=2, max=10)")
