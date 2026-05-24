@@ -39,14 +39,7 @@ async def lifespan(app: FastAPI):
     logger.info("Running database migrations")
     await db.run_migrations()
 
-    # Apply pgvector schema (idempotent — skips if tables exist)
-    try:
-        from aws.pgvector.client import PgVectorClient
-        pg = PgVectorClient()
-        pg.apply_schema()
-        logger.info("pgvector schema applied")
-    except Exception as e:
-        logger.warning("pgvector schema skipped (local Qdrant mode): %s", e)
+    # pgvector schema skipped — using SQLite, RDS not required
 
     # Ensure Qdrant collection for local dev
     try:

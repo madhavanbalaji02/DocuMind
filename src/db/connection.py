@@ -22,13 +22,21 @@ _DB_PATH = os.environ.get("SQLITE_PATH", "data/documind.db")
 _db: aiosqlite.Connection | None = None
 
 
-def _to_sqlite(query: str) -> str:
-    """Convert PostgreSQL-style query to SQLite."""
-    # $1, $2, ... → ?
-    query = re.sub(r"\$\d+", "?", query)
-    # Strip type casts: ::uuid, ::jsonb, ::text, ::timestamptz, etc.
-    query = re.sub(r"::\w+", "", query)
-    return query
+def _to_sqlite(query: str, args: tuple) -> tuple[str, tuple]:
+    """Convert PostgreSQL-style query to SQLite.
+
+    Handles repeated $N refs (e.g. WHERE a=$1 OR b=$1) by expanding args.
+    """
+    new_args: list = []
+
+    def _replace(m: re.Match) -> str:
+        idx = int(m.group(1)) - 1  # $1 → index 0
+        new_args.append(args[idx] if idx < len(args) else None)
+        return "?"
+
+    converted = re.sub(r"\$(\d+)", _replace, query)
+    converted = re.sub(r"::\w+", "", converted)
+    return converted, tuple(new_args)
 
 
 async def _conn() -> aiosqlite.Connection:
@@ -54,20 +62,23 @@ async def close_pool() -> None:
 
 async def execute(query: str, *args: Any) -> None:
     db = await _conn()
-    await db.execute(_to_sqlite(query), args)
+    q, a = _to_sqlite(query, args)
+    await db.execute(q, a)
     await db.commit()
 
 
 async def fetch(query: str, *args: Any) -> list[dict]:
     db = await _conn()
-    async with db.execute(_to_sqlite(query), args) as cur:
+    q, a = _to_sqlite(query, args)
+    async with db.execute(q, a) as cur:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
 
 async def fetchrow(query: str, *args: Any) -> dict | None:
     db = await _conn()
-    async with db.execute(_to_sqlite(query), args) as cur:
+    q, a = _to_sqlite(query, args)
+    async with db.execute(q, a) as cur:
         row = await cur.fetchone()
         return dict(row) if row else None
 
