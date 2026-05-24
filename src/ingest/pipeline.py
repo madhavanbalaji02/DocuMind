@@ -66,7 +66,7 @@ class IngestionPipeline:
         )
         return str(row["id"]) if row else None
 
-    async def ingest(self, source: str, doc_type: str) -> IngestionResult:
+    async def ingest(self, source: str, doc_type: str, user_id: str = "anon") -> IngestionResult:
         """Full ingestion pipeline for a single document source.
 
         Idempotent: skips sources already present in postgres.
@@ -134,10 +134,11 @@ class IngestionPipeline:
 
         await db.execute(
             """
-            INSERT INTO documents (id, filename, source_url, doc_type, chunk_count, metadata)
-            VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb)
+            INSERT INTO documents (id, user_id, filename, source_url, doc_type, chunk_count, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             document_id,
+            user_id,
             filename,
             url,
             doc_type,

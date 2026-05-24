@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 
 import httpx
 import pandas as pd
@@ -15,6 +16,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_BASE = os.environ.get("API_BASE_URL", "http://127.0.0.1:8888")
+
+# Unique ID for this browser session — cleared on page refresh
+if "sid" not in st.session_state:
+    st.session_state.sid = str(uuid.uuid4())
+SID = st.session_state.sid
 
 st.set_page_config(
     page_title="DocuMind",
@@ -188,14 +194,10 @@ def page_research() -> None:
     st.markdown("## Research")
     st.caption("Submit a topic — the multi-agent pipeline runs and streams results in real time.")
 
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        topic = st.text_input(
-            "Research topic",
-            placeholder="e.g. How do transformer attention mechanisms work?",
-        )
-    with col2:
-        user_id = st.text_input("User ID", value="demo")
+    topic = st.text_input(
+        "Research topic",
+        placeholder="e.g. How do transformer attention mechanisms work?",
+    )
 
     related = st.text_input(
         "Prior session ID (optional — injects prior report as context)",
@@ -203,7 +205,7 @@ def page_research() -> None:
     )
 
     if st.button("▶ Start Research", type="primary", disabled=not topic.strip()):
-        body: dict = {"topic": topic.strip(), "user_id": user_id or "demo"}
+        body: dict = {"topic": topic.strip(), "user_id": SID}
         if related.strip():
             body["related_session_id"] = related.strip()
         with st.spinner("Queuing…"):
@@ -276,6 +278,7 @@ def page_upload() -> None:
                     r = httpx.post(
                         f"{API_BASE}/ingest",
                         files={"file": (f.name, f.getvalue(), "application/octet-stream")},
+                        data={"user_id": SID},
                         timeout=120.0,
                     )
                     r.raise_for_status()
@@ -299,7 +302,7 @@ def page_upload() -> None:
                 try:
                     r = httpx.post(
                         f"{API_BASE}/ingest",
-                        data={"url": url, "doc_type": "web"},
+                        data={"url": url, "doc_type": "web", "user_id": SID},
                         timeout=120.0,
                     )
                     r.raise_for_status()
@@ -371,6 +374,7 @@ def page_pipeline_status() -> None:
         "/documents",
         status=status_filter if status_filter != "all" else None,
         limit=50,
+        user_id=SID,
     )
     if docs_data:
         docs = docs_data.get("documents", [])
@@ -437,7 +441,7 @@ def page_evaluation() -> None:
 
 def page_sessions() -> None:
     st.markdown("## Research Sessions")
-    data = api_get("/sessions", limit=100)
+    data = api_get("/sessions", limit=100, user_id=SID)
     if not data:
         return
     sessions = data.get("sessions", [])

@@ -13,22 +13,37 @@ router = APIRouter()
 
 
 @router.get("")
-async def list_sessions(limit: int = 20, offset: int = 0):
-    """Return paginated list of all research sessions."""
-    rows = await db.fetch(
-        """
-        SELECT s.id, s.user_id, s.topic, s.status, s.created_at, s.completed_at,
-               COUNT(ar.id) AS agent_run_count
-        FROM sessions s
-        LEFT JOIN agent_runs ar ON ar.session_id = s.id
-        GROUP BY s.id
-        ORDER BY s.created_at DESC
-        LIMIT $1 OFFSET $2
-        """,
-        limit,
-        offset,
-    )
-    total = await db.fetchval("SELECT COUNT(*) FROM sessions")
+async def list_sessions(limit: int = 20, offset: int = 0, user_id: str | None = None):
+    """Return paginated list of research sessions for this browser session."""
+    if user_id:
+        rows = await db.fetch(
+            """
+            SELECT s.id, s.user_id, s.topic, s.status, s.created_at, s.completed_at,
+                   COUNT(ar.id) AS agent_run_count
+            FROM sessions s
+            LEFT JOIN agent_runs ar ON ar.session_id = s.id
+            WHERE s.user_id = $1
+            GROUP BY s.id
+            ORDER BY s.created_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id, limit, offset,
+        )
+        total = await db.fetchval("SELECT COUNT(*) FROM sessions WHERE user_id = $1", user_id)
+    else:
+        rows = await db.fetch(
+            """
+            SELECT s.id, s.user_id, s.topic, s.status, s.created_at, s.completed_at,
+                   COUNT(ar.id) AS agent_run_count
+            FROM sessions s
+            LEFT JOIN agent_runs ar ON ar.session_id = s.id
+            GROUP BY s.id
+            ORDER BY s.created_at DESC
+            LIMIT $1 OFFSET $2
+            """,
+            limit, offset,
+        )
+        total = await db.fetchval("SELECT COUNT(*) FROM sessions")
     return {"sessions": [dict(r) for r in rows], "total": total}
 
 

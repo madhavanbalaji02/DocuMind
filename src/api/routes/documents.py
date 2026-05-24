@@ -117,18 +117,18 @@ async def ingest_url(url: str = Form(...), doc_type: str = Form(default="web")):
 # ── Document status ────────────────────────────────────────────────────────────
 
 @router.get("")
-async def list_documents(status: str | None = None, limit: int = 20):
-    """List documents from pgvector documents table."""
+async def list_documents(status: str | None = None, limit: int = 20, user_id: str | None = None):
+    """List documents for the current browser session."""
     try:
-        if status:
+        if user_id:
             rows = await db.fetch(
-                "SELECT id::text, s3_key, filename, doc_type, status, page_count, ingested_at "
-                "FROM documents WHERE status = $1 ORDER BY ingested_at DESC LIMIT $2",
-                status, limit,
+                "SELECT id, filename, source_url, doc_type, chunk_count, ingested_at "
+                "FROM documents WHERE user_id = $1 ORDER BY ingested_at DESC LIMIT $2",
+                user_id, limit,
             )
         else:
             rows = await db.fetch(
-                "SELECT id::text, s3_key, filename, doc_type, status, page_count, ingested_at "
+                "SELECT id, filename, source_url, doc_type, chunk_count, ingested_at "
                 "FROM documents ORDER BY ingested_at DESC LIMIT $1",
                 limit,
             )

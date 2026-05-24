@@ -28,8 +28,9 @@ async def ingest_document(
     url: str | None = Form(default=None),
     doc_type: str = Form(default="text"),
     file: UploadFile | None = File(default=None),
+    user_id: str = Form(default="anon"),
 ):
-    """Ingest a document from a file upload or URL."""
+    """Ingest a document from a file upload or URL, tagged to the user's session."""
     pipeline = get_pipeline()
     try:
         if file is not None:
@@ -46,12 +47,12 @@ async def ingest_document(
                 "code" if ext in ("py", "js", "ts", "go", "rs", "java") else
                 "text"
             )
-            result = await pipeline.ingest(tmp_path, resolved_type)
+            result = await pipeline.ingest(tmp_path, resolved_type, user_id=user_id)
             os.unlink(tmp_path)
             source = file.filename or tmp_path
 
         elif url is not None:
-            result = await pipeline.ingest(url, doc_type if doc_type != "text" else "web")
+            result = await pipeline.ingest(url, doc_type if doc_type != "text" else "web", user_id=user_id)
             source = url
 
         else:
