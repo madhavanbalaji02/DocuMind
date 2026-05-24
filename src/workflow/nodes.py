@@ -2,6 +2,9 @@
 
 Every node must be non-raising: on timeout or error it returns a graceful
 partial state so the graph can continue to finalize_report.
+
+LLM backend: Bedrock Claude Haiku (primary) → Anthropic SDK (fallback).
+COST: Haiku = $0.00025/1K input, $0.00125/1K output (~$0.006/research run)
 """
 
 from __future__ import annotations
@@ -12,19 +15,41 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-import anthropic
-
 from src.core.logging import get_logger
 from src.db import connection as db
 from src.workflow.state import ResearchState
 
 logger = get_logger(__name__)
 
-_LLM_MODEL = "claude-haiku-4-5-20251001"
+
+def _llm_complete(prompt: str, max_tokens: int = 600, system: str | None = None) -> str:
+    """Synchronous LLM call — Bedrock Haiku primary, Anthropic SDK fallback."""
+    provider = os.environ.get("LLM_PROVIDER", "bedrock")
+    if provider == "bedrock":
+        try:
+            from aws.bedrock.client import BedrockLLM
+            return BedrockLLM(model="haiku").complete(prompt, system=system, max_tokens=max_tokens)
+        except Exception as e:
+            logger.warning("Bedrock failed, falling back to Anthropic: %s", e)
+
+    # Direct Anthropic SDK fallback
+    import anthropic
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+    kwargs: dict = {
+        "model": "claude-haiku-4-5",
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system:
+        kwargs["system"] = system
+    resp = client.messages.create(**kwargs)
+    return resp.content[0].text
 
 
-def _anthropic_client() -> anthropic.AsyncAnthropic:
-    return anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+async def _async_llm(prompt: str, max_tokens: int = 600, system: str | None = None) -> str:
+    """Async wrapper for the sync LLM call."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: _llm_complete(prompt, max_tokens, system))
 
 
 async def plan_research(state: ResearchState) -> dict:
@@ -57,22 +82,11 @@ async def plan_research(state: ResearchState) -> dict:
         prior_ctx = f"\n\nPrior research (build on, don't repeat):\n{summaries}"
 
     try:
-        client = _anthropic_client()
-        response = await asyncio.wait_for(
-            client.messages.create(
-                model=_LLM_MODEL,
-                max_tokens=400,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Produce exactly 4 focused research questions covering this topic. "
-                        f"Output ONLY a JSON array of strings.{prior_ctx}\n\nTopic: {state['topic']}"
-                    ),
-                }],
-            ),
-            timeout=25.0,
+        prompt = (
+            f"Produce exactly 4 focused research questions covering this topic. "
+            f"Output ONLY a JSON array of strings.{prior_ctx}\n\nTopic: {state['topic']}"
         )
-        raw = response.content[0].text.strip()
+        raw = await asyncio.wait_for(_async_llm(prompt, max_tokens=400), timeout=25.0)
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         questions: list[str] = json.loads(raw)
@@ -95,14 +109,21 @@ async def plan_research(state: ResearchState) -> dict:
 async def retrieve_context(state: ResearchState) -> dict:
     """Retrieve chunks for each question using the hybrid retriever (no LLM calls).
 
-    Deliberately avoids RAGChain.query() so we don't burn Anthropic API quota
-    before the crew even starts. The crew's own search_knowledge_base tool will
-    generate answers from these chunks.
+    Tries pgvector first, falls back to Qdrant-based HybridRetriever.
     Timeout: 60s total.
     """
     logger.info("[retrieve_context] session=%s", state["session_id"])
-    from src.rag.retriever import HybridRetriever
-    retriever = HybridRetriever()
+
+    # Choose retriever based on configuration
+    try:
+        from aws.pgvector.retriever import PgVectorHybridRetriever
+        retriever = PgVectorHybridRetriever()
+        logger.info("[retrieve_context] using pgvector retriever")
+    except Exception:
+        from src.rag.retriever import HybridRetriever
+        retriever = HybridRetriever()  # type: ignore[assignment]
+        logger.info("[retrieve_context] using Qdrant retriever (pgvector unavailable)")
+
     all_context: list[dict] = []
     seen: set[str] = set()
 
@@ -117,13 +138,17 @@ async def retrieve_context(state: ResearchState) -> dict:
                     for chunk in chunks:
                         if chunk.chunk_id not in seen:
                             seen.add(chunk.chunk_id)
-                            all_context.append({
+                            ctx: dict = {
                                 "question": question,
                                 "chunk_id": chunk.chunk_id,
                                 "text": chunk.text,
                                 "source": chunk.source,
                                 "score": chunk.score,
-                            })
+                            }
+                            # Inject parent context if available (pgvector retriever)
+                            if hasattr(chunk, "parent_context") and chunk.parent_context:
+                                ctx["parent_context"] = chunk.parent_context
+                            all_context.append(ctx)
                 except asyncio.TimeoutError:
                     logger.warning("[retrieve_context] question timed out: %r", question[:40])
                 except Exception as exc:
@@ -171,7 +196,7 @@ async def analyze_data(state: ResearchState) -> dict:
 
 
 async def run_crew(state: ResearchState) -> dict:
-    """Run the CrewAI crew. Timeout: 3 minutes (crew has its own 4-min limit)."""
+    """Run the CrewAI crew. Timeout: 3 minutes."""
     logger.info("[run_crew] session=%s", state["session_id"])
 
     context_parts = [
@@ -206,7 +231,6 @@ async def run_crew(state: ResearchState) -> dict:
 
 
 def _fallback_report(state: ResearchState) -> str:
-    """Generate a minimal report from retrieved context when crew fails/times out."""
     chunks = state.get("retrieved_context", [])
     context_text = "\n\n".join(
         f"**Source:** {c['source']}\n{c['text'][:400]}"
@@ -232,24 +256,13 @@ async def critic_review(state: ResearchState) -> dict:
         f"[{i+1}] {c['text'][:250]}" for i, c in enumerate(state["retrieved_context"][:6])
     )
     try:
-        client = _anthropic_client()
-        response = await asyncio.wait_for(
-            client.messages.create(
-                model=_LLM_MODEL,
-                max_tokens=600,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Review this draft report against the sources. Output valid JSON only.\n\n"
-                        f"Sources:\n{source_texts}\n\n"
-                        f"Draft:\n{state['draft_report'][:2000]}\n\n"
-                        f'Return: {{"verdict":"pass"|"fail","issues":[],"suggestions":[]}}'
-                    ),
-                }],
-            ),
-            timeout=40.0,
+        prompt = (
+            f"Review this draft report against the sources. Output valid JSON only.\n\n"
+            f"Sources:\n{source_texts}\n\n"
+            f"Draft:\n{state['draft_report'][:2000]}\n\n"
+            f'Return: {{"verdict":"pass"|"fail","issues":[],"suggestions":[]}}'
         )
-        raw = response.content[0].text.strip()
+        raw = await asyncio.wait_for(_async_llm(prompt, max_tokens=600), timeout=40.0)
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         data = json.loads(raw)
@@ -276,24 +289,13 @@ async def revise_report(state: ResearchState) -> dict:
     """Writer revises based on feedback. Timeout: 45s."""
     logger.info("[revise_report] session=%s iteration=%d", state["session_id"], state["iteration"])
     try:
-        client = _anthropic_client()
-        response = await asyncio.wait_for(
-            client.messages.create(
-                model=_LLM_MODEL,
-                max_tokens=3000,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Revise this research report based on the critic feedback. "
-                        f"Keep all valid content.\n\n"
-                        f"Feedback:\n{state['critic_feedback']}\n\n"
-                        f"Current draft:\n{state['draft_report'][:3000]}"
-                    ),
-                }],
-            ),
-            timeout=40.0,
+        prompt = (
+            f"Revise this research report based on the critic feedback. "
+            f"Keep all valid content.\n\n"
+            f"Feedback:\n{state['critic_feedback']}\n\n"
+            f"Current draft:\n{state['draft_report'][:3000]}"
         )
-        revised = response.content[0].text
+        revised = await asyncio.wait_for(_async_llm(prompt, max_tokens=3000), timeout=40.0)
     except Exception as exc:
         logger.warning("[revise_report] failed: %s — keeping original draft", exc)
         revised = state["draft_report"]
@@ -302,9 +304,28 @@ async def revise_report(state: ResearchState) -> dict:
 
 
 async def finalize_report(state: ResearchState) -> dict:
-    """Save report to postgres. Timeout: 20s."""
+    """Save report to postgres and apply guardrails. Timeout: 20s."""
     logger.info("[finalize_report] session=%s", state["session_id"])
     final = state["draft_report"]
+
+    # Apply guardrails
+    try:
+        from evaluation.guardrails import get_guardrails
+        contexts = [c["text"] for c in state.get("retrieved_context", [])[:5]]
+        sources = list({c["source"] for c in state.get("retrieved_context", [])})
+        guardrails = get_guardrails()
+        guarded = guardrails.validate_answer(
+            question=state["topic"],
+            answer=final,
+            contexts=contexts,
+            sources=sources,
+        )
+        final = guarded.answer
+        if guarded.warning:
+            logger.info("[finalize_report] guardrail: %s", guarded.warning)
+    except Exception as exc:
+        logger.warning("[finalize_report] guardrails skipped: %s", exc)
+
     word_count = len(final.split())
     lines = final.strip().splitlines()
     title = next(

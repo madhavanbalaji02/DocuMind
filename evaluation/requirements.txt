@@ -1,0 +1,6 @@
+ragas>=0.2
+boto3>=1.35
+sentence-transformers>=3.3
+anthropic>=0.40
+pydantic>=2.10
+python-dotenv>=1.0

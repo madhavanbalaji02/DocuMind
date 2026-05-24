@@ -10,14 +10,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api.routes import ingest, research, sessions
+from src.api.routes import documents as documents_router
 from src.api.websocket import router as ws_router
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+_sqs_worker = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _sqs_worker
     import logging as _logging
 
     from dotenv import load_dotenv
@@ -35,14 +39,38 @@ async def lifespan(app: FastAPI):
     logger.info("Running database migrations")
     await db.run_migrations()
 
-    from src.ingest.pipeline import IngestionPipeline
-    pipeline = IngestionPipeline()
-    await pipeline._ensure_collection()
-    await pipeline.close()
+    # Apply pgvector schema (idempotent — skips if tables exist)
+    try:
+        from aws.pgvector.client import PgVectorClient
+        pg = PgVectorClient()
+        pg.apply_schema()
+        logger.info("pgvector schema applied")
+    except Exception as e:
+        logger.warning("pgvector schema skipped (local Qdrant mode): %s", e)
+
+    # Ensure Qdrant collection for local dev
+    try:
+        from src.ingest.pipeline import IngestionPipeline
+        pipeline = IngestionPipeline()
+        await pipeline._ensure_collection()
+        await pipeline.close()
+    except Exception as e:
+        logger.warning("Qdrant collection setup skipped: %s", e)
+
+    # Start SQS ingestion worker (no-op if SQS_QUEUE_URL not set)
+    try:
+        from src.workers.sqs_worker import start_worker_thread
+        _sqs_worker = start_worker_thread()
+        logger.info("SQS ingestion worker started")
+    except Exception as e:
+        logger.warning("SQS worker not started: %s", e)
+
     logger.info("Startup complete")
 
     yield
 
+    if _sqs_worker:
+        _sqs_worker.stop()
     await db.close_pool()
     logger.info("Shutdown complete")
 
@@ -65,6 +93,7 @@ def create_app() -> FastAPI:
 
     app.include_router(research.router, prefix="/research", tags=["research"])
     app.include_router(ingest.router, prefix="/ingest", tags=["ingest"])
+    app.include_router(documents_router.router, prefix="/documents", tags=["documents"])
     app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
     app.include_router(ws_router, tags=["websocket"])
 
@@ -80,25 +109,39 @@ def create_app() -> FastAPI:
     async def health_check():
         qdrant_ok = False
         postgres_ok = False
+        pgvector_ok = False
+
         try:
-            from qdrant_client import AsyncQdrantClient
-            q = AsyncQdrantClient(url=os.environ.get("QDRANT_URL", "http://localhost:6333"))
+            from src.core.qdrant import make_async_qdrant_client
+            q = make_async_qdrant_client()
             await q.get_collections()
             await q.close()
             qdrant_ok = True
         except Exception as exc:
             logger.warning("Qdrant health: %s", exc)
+
         try:
             from src.db import connection as db
             await db.fetchval("SELECT 1")
             postgres_ok = True
         except Exception as exc:
             logger.warning("Postgres health: %s", exc)
+
+        try:
+            from aws.pgvector.client import PgVectorClient
+            pg = PgVectorClient()
+            pgvector_ok = pg.health_check()
+        except Exception:
+            pass  # pgvector is optional in local dev
+
+        status = "ok" if postgres_ok else "degraded"
         return {
-            "status": "ok" if (qdrant_ok and postgres_ok) else "degraded",
+            "status": status,
             "qdrant_ok": qdrant_ok,
             "postgres_ok": postgres_ok,
+            "pgvector_ok": pgvector_ok,
             "embedding_mode": os.environ.get("EMBEDDING_MODE", "local"),
+            "llm_provider": os.environ.get("LLM_PROVIDER", "bedrock"),
         }
 
     @app.get("/metrics", tags=["ops"])
@@ -108,9 +151,9 @@ def create_app() -> FastAPI:
 
         qdrant_data: dict = {}
         try:
-            from qdrant_client import AsyncQdrantClient
+            from src.core.qdrant import make_async_qdrant_client
             collection_name = os.environ.get("QDRANT_COLLECTION", "documind_chunks")
-            q = AsyncQdrantClient(url=os.environ.get("QDRANT_URL", "http://localhost:6333"))
+            q = make_async_qdrant_client()
             info = await q.get_collection(collection_name)
             await q.close()
             qdrant_data = {
@@ -149,15 +192,16 @@ def create_app() -> FastAPI:
         embed_model = (
             os.environ.get("LOCAL_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
             if embed_mode == "local"
-            else os.environ.get("BIGRED200_EMBED_MODEL", "BAAI/bge-m3")
+            else "amazon.titan-embed-text-v2:0"
         )
+        embed_dim = 384 if embed_mode == "local" else 1536
         return {
             "qdrant": qdrant_data,
             "postgres": pg_data,
             "embeddings": {
                 "mode": embed_mode,
                 "model": embed_model,
-                "dimension": 384 if embed_mode == "local" else 1024,
+                "dimension": embed_dim,
             },
         }
 

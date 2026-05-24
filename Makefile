@@ -1,4 +1,4 @@
-.PHONY: up down api ui mcp test smoke bench demo logs clean
+.PHONY: up down api ui mcp test smoke bench demo logs clean provision deploy
 
 up:
 	docker compose up -d
@@ -40,3 +40,9 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -name "*.pyc" -delete 2>/dev/null || true
 	@echo "Cleaned."
+
+provision:
+	python scripts/provision_ec2.py
+
+deploy:
+	bash scripts/deploy_to_ec2.sh

@@ -12,6 +12,16 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 logger = get_logger(__name__)
 router = APIRouter()
 
+_pipeline = None
+
+
+def get_pipeline():
+    global _pipeline
+    if _pipeline is None:
+        from src.ingest.pipeline import IngestionPipeline
+        _pipeline = IngestionPipeline()
+    return _pipeline
+
 
 @router.post("")
 async def ingest_document(
@@ -20,19 +30,15 @@ async def ingest_document(
     file: UploadFile | None = File(default=None),
 ):
     """Ingest a document from a file upload or URL."""
-    from src.ingest.pipeline import IngestionPipeline
-
-    pipeline = IngestionPipeline()
+    pipeline = get_pipeline()
     try:
         if file is not None:
-            # Write upload to a temp file, then ingest
             suffix = Path(file.filename or "upload").suffix or ".txt"
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 content = await file.read()
                 tmp.write(content)
                 tmp_path = tmp.name
 
-            # Infer doc_type from extension if not specified
             ext = suffix.lower().lstrip(".")
             resolved_type = doc_type if doc_type != "text" else (
                 "pdf" if ext == "pdf" else
@@ -58,5 +64,8 @@ async def ingest_document(
             "embed_time_ms": round(result.embed_time_ms),
             "total_time_ms": round(result.total_time_ms),
         }
-    finally:
-        await pipeline.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Ingestion failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))

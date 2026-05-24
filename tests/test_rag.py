@@ -172,9 +172,9 @@ class TestRAGChain:
         mock_message = MagicMock()
         mock_message.content = [MagicMock(text="This is the answer. Sources: [1] doc0.pdf")]
 
-        with patch("anthropic.AsyncAnthropic") as mock_anthropic_cls:
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_message)
+        with patch("anthropic.Anthropic") as mock_anthropic_cls:
+            mock_client = MagicMock()
+            mock_client.messages.create = MagicMock(return_value=mock_message)
             mock_anthropic_cls.return_value = mock_client
 
             chain = RAGChain(retriever=mock_retriever, reranker=mock_reranker)

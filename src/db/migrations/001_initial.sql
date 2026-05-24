@@ -8,6 +8,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     completed_at TIMESTAMPTZ,
     metadata JSONB DEFAULT '{}'
 );
+-- Ensure columns exist even if table was created by pgvector schema migration
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id VARCHAR(255);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
+
+-- pgvector schema adds s3_key NOT NULL but direct-upload pipeline doesn't use S3
+ALTER TABLE documents ALTER COLUMN s3_key DROP NOT NULL;
+ALTER TABLE documents ALTER COLUMN filename DROP NOT NULL;
 
 -- Individual agent runs within a session
 CREATE TABLE IF NOT EXISTS agent_runs (

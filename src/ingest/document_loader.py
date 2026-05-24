@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.core.logging import get_logger
 from pathlib import Path
+import os
 
 import httpx
 import pandas as pd
@@ -16,38 +17,68 @@ class DocumentLoader:
     """Load raw text from various document sources."""
 
     async def load_pdf(self, path: str) -> str:
-        """Extract text from a PDF file using pypdf."""
-        from pypdf import PdfReader
+        """Extract text from a PDF using pymupdf (fast) with pypdf fallback."""
+        import asyncio
 
-        reader = PdfReader(path)
-        pages: list[str] = []
-        for page_num, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append(f"[Page {page_num}]\n{text}")
-        full_text = "\n\n".join(pages)
-        logger.info("Loaded PDF %s: %d pages, %d chars", path, len(reader.pages), len(full_text))
+        def _extract() -> tuple[str, int]:
+            # pymupdf is ~10x faster than pypdf for large files
+            try:
+                import fitz  # pymupdf
+                doc = fitz.open(path)
+                MAX_PAGES = int(os.environ.get("TEXTRACT_MAX_PAGES", "50"))
+                pages: list[str] = []
+                for page_num in range(min(len(doc), MAX_PAGES)):
+                    text = doc[page_num].get_text("text").strip()
+                    if text:
+                        pages.append(f"[Page {page_num + 1}]\n{text}")
+                total = len(doc)
+                doc.close()
+                return "\n\n".join(pages), total
+            except ImportError:
+                from pypdf import PdfReader
+                reader = PdfReader(path)
+                MAX_PAGES = int(os.environ.get("TEXTRACT_MAX_PAGES", "50"))
+                pages = []
+                for page_num, page in enumerate(reader.pages[:MAX_PAGES], start=1):
+                    text = page.extract_text() or ""
+                    if text.strip():
+                        pages.append(f"[Page {page_num}]\n{text}")
+                return "\n\n".join(pages), len(reader.pages)
+
+        loop = asyncio.get_event_loop()
+        full_text, total_pages = await loop.run_in_executor(None, _extract)
+        logger.info("Loaded PDF %s: %d pages, %d chars", path, total_pages, len(full_text))
         return full_text
 
     async def load_url(self, url: str) -> str:
-        """Fetch a web page and extract readable text via BeautifulSoup."""
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        """Fetch a web page or PDF URL and extract readable text."""
+        import tempfile, os
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             response = await client.get(
                 url,
-                headers={"User-Agent": "DocuMind/1.0 research-bot"},
+                headers={"User-Agent": "Mozilla/5.0 DocuMind/1.0 research-bot"},
             )
             response.raise_for_status()
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        content_type = response.headers.get("content-type", "")
+        is_pdf = "pdf" in content_type or url.lower().split("?")[0].endswith(".pdf")
 
-        # Remove boilerplate elements
+        if is_pdf:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(response.content)
+                tmp_path = tmp.name
+            try:
+                text = await self.load_pdf(tmp_path)
+            finally:
+                os.unlink(tmp_path)
+            logger.info("Loaded PDF URL %s: %d chars", url, len(text))
+            return text
+
+        soup = BeautifulSoup(response.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
-
-        # Prefer <article> or <main>, fall back to <body>
         container = soup.find("article") or soup.find("main") or soup.body
         text = container.get_text(separator="\n", strip=True) if container else soup.get_text()
-
         logger.info("Loaded URL %s: %d chars", url, len(text))
         return text
 

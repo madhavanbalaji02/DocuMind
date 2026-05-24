@@ -4,39 +4,51 @@ build-backend = "hatchling.build"
 
 [project]
 name = "documind"
-version = "0.1.0"
-description = "Production-grade multi-agent research and intelligence platform"
+version = "0.2.0"
+description = "Enterprise-grade Layout-Aware Multi-Modal RAG on AWS"
 requires-python = ">=3.11"
 dependencies = [
+    # Core AI / orchestration
     "langchain>=0.3",
     "langchain-community>=0.3",
-    "langchain-openai>=0.2",
+    "langchain-anthropic>=0.2",
     "langgraph>=0.2",
     "langgraph-checkpoint-postgres>=0.1",
     "crewai>=0.80",
     "crewai-tools>=0.15",
-    "qdrant-client>=1.12",
+    "anthropic>=0.40",
+    # AWS
+    "boto3>=1.35",
+    "botocore>=1.35",
+    # Database
     "asyncpg>=0.30",
     "psycopg2-binary>=2.9",
+    # API / serving
     "fastapi>=0.115",
     "uvicorn>=0.32",
     "websockets>=13",
+    "python-multipart>=0.0.9",
     "streamlit>=1.40",
-    "sentence-transformers>=3.3",
     "mcp>=1.0",
-    "openai>=1.55",
-    "anthropic>=0.40",
+    # Embeddings
+    "sentence-transformers>=3.3",
+    # Document parsing
+    "pypdf>=5.1",
+    "pymupdf>=1.24",
+    "beautifulsoup4>=4.12",
+    # Evaluation
+    "ragas>=0.2",
+    # Utilities
     "python-dotenv>=1.0",
     "pydantic>=2.10",
     "pydantic-settings>=2.6",
     "httpx>=0.28",
     "rank-bm25>=0.2",
-    "pypdf>=5.1",
-    "beautifulsoup4>=4.12",
     "pandas>=2.2",
     "numpy>=1.26",
     "rich>=13.9",
     "typer>=0.14",
+    "openai>=1.55",
 ]
 
 [project.optional-dependencies]

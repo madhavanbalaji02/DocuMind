@@ -201,12 +201,12 @@ class TestReviseReportNode:
         mock_message = MagicMock()
         mock_message.content = [MagicMock(text=revised_text)]
 
-        with patch("anthropic.AsyncAnthropic") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_message)
+        with patch("anthropic.Anthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_client.messages.create = MagicMock(return_value=mock_message)
             mock_cls.return_value = mock_client
 
-            with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key", "LLM_PROVIDER": "anthropic"}):
                 state = _base_state(draft_report="Old draft", critic_feedback="Fix it")
                 result = await revise_report(state)
 

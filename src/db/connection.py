@@ -19,15 +19,16 @@ async def get_pool() -> Pool:
     """Return singleton asyncpg connection pool, creating it on first call."""
     global _pool
     if _pool is None:
-        dsn = os.environ["DATABASE_URL_ASYNC"].replace(
-            "postgresql+asyncpg://", "postgresql://"
-        )
+        raw = os.environ["DATABASE_URL_ASYNC"].replace("postgresql+asyncpg://", "postgresql://")
+        use_ssl = "sslmode=require" in raw or "ssl=true" in raw.lower()
+        # Strip SSL query params — asyncpg wants them as the ssl= kwarg, not in the DSN
+        dsn = raw.split("?")[0]
         _pool = await asyncpg.create_pool(
             dsn=dsn,
             min_size=2,
             max_size=10,
             command_timeout=60,
-            ssl=False,
+            ssl="require" if use_ssl else False,
             server_settings={"application_name": "documind"},
         )
         logger.info("asyncpg pool created (min=2, max=10)")

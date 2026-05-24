@@ -1,3 +1,8 @@
+# LOCAL DEVELOPMENT ONLY
+# Production uses: AWS RDS (pgvector) + EC2 + S3 + SQS + Step Functions
+# Run: docker compose up -d
+# Set EMBEDDING_MODE=local in .env (default)
+
 services:
   qdrant:
     image: qdrant/qdrant:latest

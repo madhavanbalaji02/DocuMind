@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
+from src.core.qdrant import make_async_qdrant_client
+
 from src.db import connection as db
 from src.embeddings.embedding_service import EmbeddingService
 from src.ingest.chunker import SemanticChunker
@@ -37,10 +39,7 @@ class IngestionPipeline:
         self.loader = DocumentLoader()
         self.chunker = SemanticChunker()
         self.embedder = EmbeddingService()
-        self.qdrant = AsyncQdrantClient(
-            url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
-            api_key=os.environ.get("QDRANT_API_KEY") or None,
-        )
+        self.qdrant = make_async_qdrant_client()
         self.collection = os.environ.get("QDRANT_COLLECTION", "documind_chunks")
 
     async def _ensure_collection(self) -> None:

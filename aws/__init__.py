@@ -1,0 +1,1 @@
+# DocuMind AWS infrastructure package

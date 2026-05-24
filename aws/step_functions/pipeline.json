@@ -1,0 +1,132 @@
+{
+  "Comment": "DocuMind 3-stage document ingestion pipeline: Parse → Embed → Store",
+  "StartAt": "Stage1_Parse",
+  "States": {
+    "Stage1_Parse": {
+      "Type": "Task",
+      "Comment": "Textract layout-aware parsing ($0.015/page tables, $0.0015/page text)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "documind-stage1-parse",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.parse_result",
+      "OutputPath": "$.Payload",
+      "Next": "Stage2_Embed",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.TooManyRequestsException",
+            "Textract.LimitExceededException",
+            "States.TaskFailed"
+          ],
+          "MaxAttempts": 3,
+          "IntervalSeconds": 30,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "MarkFailed",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "Stage2_Embed": {
+      "Type": "Task",
+      "Comment": "Hierarchical chunking + bge-small-en-v1.5 embeddings (free, CPU)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "documind-stage2-embed",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.embed_result",
+      "OutputPath": "$.Payload",
+      "Next": "Stage3_Store",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "MaxAttempts": 2,
+          "IntervalSeconds": 10,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "MarkFailed",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "Stage3_Store": {
+      "Type": "Task",
+      "Comment": "pgvector storage + Comprehend entities (~$0.001/doc)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "documind-stage3-store",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.store_result",
+      "OutputPath": "$.Payload",
+      "Next": "MarkReady",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "MaxAttempts": 2,
+          "IntervalSeconds": 5
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "MarkFailed",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "MarkReady": {
+      "Type": "Task",
+      "Comment": "Mark job as ready in DynamoDB",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "documind-jobs",
+        "Key": {
+          "s3_key": {"S.$": "$.s3_key"}
+        },
+        "UpdateExpression": "SET #s = :ready, #cc = :chunks",
+        "ExpressionAttributeNames": {
+          "#s": "status",
+          "#cc": "chunk_count"
+        },
+        "ExpressionAttributeValues": {
+          ":ready": {"S": "ready"},
+          ":chunks": {"N.$": "States.Format('{}', $.total_chunks)"}
+        }
+      },
+      "End": true
+    },
+    "MarkFailed": {
+      "Type": "Task",
+      "Comment": "Mark job as failed in DynamoDB",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "documind-jobs",
+        "Key": {
+          "s3_key": {"S.$": "$.s3_key"}
+        },
+        "UpdateExpression": "SET #s = :failed, #e = :err",
+        "ExpressionAttributeNames": {
+          "#s": "status",
+          "#e": "error"
+        },
+        "ExpressionAttributeValues": {
+          ":failed": {"S": "failed"},
+          ":err": {"S.$": "$.error.Cause"}
+        }
+      },
+      "End": true
+    }
+  }
+}

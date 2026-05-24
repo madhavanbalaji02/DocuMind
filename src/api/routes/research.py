@@ -7,7 +7,6 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-import anthropic
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel

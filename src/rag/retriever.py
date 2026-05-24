@@ -10,6 +10,8 @@ from typing import Any
 
 from qdrant_client import AsyncQdrantClient
 
+from src.core.qdrant import make_async_qdrant_client
+
 from src.db import connection as db
 from src.embeddings.embedding_service import EmbeddingService
 
@@ -78,10 +80,7 @@ class HybridRetriever:
 
     def __init__(self) -> None:
         self.embedder = EmbeddingService()
-        self.qdrant = AsyncQdrantClient(
-            url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
-            api_key=os.environ.get("QDRANT_API_KEY") or None,
-        )
+        self.qdrant = make_async_qdrant_client()
         self.collection = os.environ.get("QDRANT_COLLECTION", "documind_chunks")
 
         # Use module-level cache; populated on first retrieve call
