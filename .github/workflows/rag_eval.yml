@@ -1,0 +1,76 @@
+name: RAG Eval on RAG Changes
+
+on:
+  push:
+    paths:
+      - 'src/rag/**'
+      - 'src/agents/**'
+      - 'src/workflow/nodes.py'
+      - 'evaluation/ground_truth.jsonl'
+      - 'evaluation/guardrails.py'
+      - 'aws/bedrock/**'
+      - 'aws/pgvector/**'
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      n_samples:
+        description: 'Number of eval samples'
+        default: '10'
+        required: false
+
+jobs:
+  eval:
+    name: RAGAS Evaluation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-eval-${{ hashFiles('evaluation/requirements.txt') }}
+
+      - name: Install evaluation dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            sentence-transformers>=3.3 \
+            anthropic>=0.40 \
+            boto3>=1.35 \
+            pydantic>=2.10 \
+            python-dotenv>=1.0 \
+            rank-bm25>=0.2 \
+            numpy>=1.26
+
+      - name: Install project (no heavy deps)
+        run: pip install -e "." --no-deps
+
+      - name: Run RAG eval (10 samples for CI speed)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-2
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LLM_PROVIDER: anthropic
+          EMBEDDING_MODE: local
+          GUARDRAILS_ENABLED: 'true'
+          # DATABASE_URL: not set — eval uses mock retrieval if DB unavailable
+        run: |
+          python evaluation/eval_runner.py \
+            --n-samples ${{ github.event.inputs.n_samples || '10' }} \
+            --fail-below 0.60
+
+      - name: Upload eval report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rag-eval-report
+          path: "*.json"
+          if-no-files-found: ignore
