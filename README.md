@@ -162,25 +162,6 @@
 
 ---
 
-## Cost Budget
-
-| Service | Estimated Monthly | Notes |
-|---|---|---|
-| EC2 t3.micro | $0 | AWS Free Tier (12 months) |
-| RDS db.t3.micro | $0 | AWS Free Tier — stop when not demoing |
-| S3 | ~$0.02 | Minimal storage |
-| Bedrock Haiku | ~$2.00 | 500 research runs × $0.004 avg |
-| Bedrock Titan Embed v2 | ~$0.10 | ~5M tokens/month |
-| Textract | ~$0.15 | 10 docs/month × $0.015/page |
-| Comprehend | ~$0.05 | Entity extraction |
-| CloudFront | ~$0.00 | 1TB free/month |
-| SQS + Lambda | ~$0.00 | Within free tier |
-| **Total** | **~$2.32/month** | |
-
-> Stop RDS when not demoing: `aws rds stop-db-instance --db-instance-identifier documind-db`
-
----
-
 ## Tech Stack
 
 | Technology | Role |
