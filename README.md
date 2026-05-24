@@ -5,7 +5,7 @@
 
 **Enterprise-grade multi-agent RAG research platform** built on AWS. Submit a research topic; a LangGraph workflow orchestrates CrewAI agents (Researcher → Analyst → Writer → Critic) to produce a fully cited report. Documents are ingested via direct upload or URL, chunked, embedded with Bedrock Titan, and stored in pgvector on RDS — all behind a polished dark Streamlit dashboard served over CloudFront HTTPS.
 
-**Live:** `https://d2ivfev3xe6utf.cloudfront.net`
+**Live:** [https://d2ivfev3xe6utf.cloudfront.net](https://d2ivfev3xe6utf.cloudfront.net)
 
 ---
 
