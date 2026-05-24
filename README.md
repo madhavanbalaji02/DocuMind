@@ -3,69 +3,162 @@
 ![CI](https://github.com/madhavanbalaji02/DocuMind/actions/workflows/ci.yml/badge.svg)
 ![RAG Eval](https://github.com/madhavanbalaji02/DocuMind/actions/workflows/rag_eval.yml/badge.svg)
 
-Enterprise-grade Layout-Aware Multi-Modal RAG research platform. Submit a topic; LangGraph orchestrates a stateful workflow; CrewAI agents (Researcher, Analyst, Writer, Critic) collaborate to produce a cited report; results persist in AWS RDS (pgvector); documents are ingested via S3 → SQS → Step Functions with Amazon Textract layout-aware parsing.
+**Enterprise-grade multi-agent RAG research platform** built on AWS. Submit a research topic; a LangGraph workflow orchestrates CrewAI agents (Researcher → Analyst → Writer → Critic) to produce a fully cited report. Documents are ingested via direct upload or URL, chunked, embedded with Bedrock Titan, and stored in pgvector on RDS — all behind a polished dark Streamlit dashboard served over CloudFront HTTPS.
+
+**Live:** `https://d2ivfev3xe6utf.cloudfront.net`
 
 ---
 
-## AWS Architecture
+## System Design Architecture
 
 ```
-User / Claude Desktop
-       │
-       ▼
-  MCP Server  ◄──►  FastAPI + Streamlit (EC2 t2.micro)
-                            │
-              ┌─────────────┴──────────────┐
-              ▼                            ▼
-        LangGraph Workflow            S3 → SQS → Step Functions
-        ┌──────────────────┐          ┌──────────────────────────┐
-        │ plan_research     │          │ Stage1: Textract parse    │
-        │ retrieve_context  │          │ Stage2: bge-small embed   │
-        │ analyze_data      │          │ Stage3: pgvector store    │
-        │ run_crew          │          └──────────────────────────┘
-        │ critic_review     │
-        │ finalize_report   │
-        └──────────────────┘
-              │
-              ▼
-     CrewAI (Bedrock Haiku)
-     Researcher → Analyst
-         Writer → Critic
-              │
-              ▼
-       RAG Pipeline
-     ┌────────────────────────────┐
-     │ PgVectorHybridRetriever    │
-     │  Dense  (pgvector IVFFlat) │
-     │  Sparse (Postgres FTS)     │
-     │  Fusion (RRF k=60)         │
-     │  Rerank (CrossEncoder)     │
-     │  Parent context injection  │
-     └────────────────────────────┘
-              │
-              ▼
-     AWS RDS PostgreSQL 15 + pgvector
-     (documind-db, db.t3.micro, us-east-2)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          CLIENT LAYER                                    │
+│                                                                          │
+│   Browser ──► CloudFront (HTTPS) ──► nginx (EC2 t3.micro)               │
+│   Claude Desktop ──► MCP Server (stdio)                                  │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │      EC2 t3.micro        │
+                    │  ┌───────────────────┐  │
+                    │  │  Streamlit :8501  │  │
+                    │  │  (Dark UI / HTTPS)│  │
+                    │  └────────┬──────────┘  │
+                    │           │ httpx        │
+                    │  ┌────────▼──────────┐  │
+                    │  │  FastAPI  :8888   │  │
+                    │  │  + WebSocket /ws  │  │
+                    │  └────────┬──────────┘  │
+                    │           │              │
+                    │  ┌────────▼──────────┐  │
+                    │  │  Qdrant  :6333    │  │
+                    │  │  (local vector DB)│  │
+                    │  └───────────────────┘  │
+                    └────────────┬────────────┘
+                                 │
+          ┌──────────────────────┼──────────────────────┐
+          │                      │                       │
+          ▼                      ▼                       ▼
+┌─────────────────┐   ┌──────────────────┐   ┌──────────────────────┐
+│  INGESTION PATH │   │  RESEARCH PATH   │   │   STORAGE LAYER      │
+│                 │   │                  │   │                      │
+│ Upload File/URL │   │ POST /research   │   │ RDS PostgreSQL 15    │
+│       │         │   │       │          │   │ + pgvector extension │
+│       ▼         │   │       ▼          │   │                      │
+│ DocumentLoader  │   │  LangGraph DAG   │   │ Tables:              │
+│  ├─ pymupdf     │   │  ┌────────────┐  │   │  documents           │
+│  ├─ BeautifulSoup│  │  │plan_research│ │   │  sessions            │
+│  └─ PDF URL     │   │  │retrieve_ctx│  │   │  agent_runs          │
+│  auto-detect    │   │  │analyze_data│  │   │  retrievals          │
+│       │         │   │  │run_crew    │  │   │  reports             │
+│       ▼         │   │  │critic_loop │  │   │                      │
+│ SemanticChunker │   │  │finalize    │  │   │ AWS S3               │
+│  512 tok/64 ovlp│   │  └─────┬──────┘  │   │  document store      │
+│       │         │   │        │          │   │  eval reports        │
+│       ▼         │   │        ▼          │   │                      │
+│ EmbeddingService│   │   CrewAI Crew     │   │ DynamoDB             │
+│  Bedrock Titan  │   │  ┌─────────────┐ │   │  job status tracking │
+│  Embed v2       │   │  │ Researcher  │ │   │                      │
+│  1024-dim       │   │  │ Analyst     │ │   │ SQS                  │
+│       │         │   │  │ Writer      │ │   │  ingestion event bus │
+│       ▼         │   │  │ Critic      │ │   └──────────────────────┘
+│ Qdrant upsert   │   │  └──────┬──────┘ │
+│ + Postgres write│   │         │         │
+└─────────────────┘   │         ▼         │
+                       │  HybridRetriever │
+                       │  ┌─────────────┐ │
+                       │  │ Dense search│ │
+                       │  │ (pgvector)  │ │
+                       │  │ BM25 sparse │ │
+                       │  │ RRF fusion  │ │
+                       │  │ CrossEncoder│ │
+                       │  │ reranker    │ │
+                       │  └──────┬──────┘ │
+                       │         │         │
+                       │         ▼         │
+                       │  Bedrock Claude   │
+                       │  Haiku (LLM)      │
+                       │  + Guardrails     │
+                       └──────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    ENTERPRISE AWS PIPELINE (Step Functions)               │
+│                                                                          │
+│  S3 upload ──► Lambda s3-trigger ──► SQS ──► Step Functions             │
+│                                              │                           │
+│                              ┌───────────────┼────────────────────┐     │
+│                              ▼               ▼                    ▼     │
+│                         Stage 1:        Stage 2:            Stage 3:    │
+│                         Textract        Bedrock Titan       pgvector    │
+│                         parse PDF       embed chunks        store +     │
+│                         (layout-aware)  1024-dim            Comprehend  │
+│                         AnalyzeDocument                     entities    │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## AWS Deployment
+## What's Built
+
+### Core Platform
+- **LangGraph** stateful research workflow with critic→revise loop (max 2 iterations), human-in-the-loop approval via `POST /research/{id}/approve`
+- **CrewAI** 4-agent crew: Researcher → Analyst → Writer → Critic running on Bedrock Claude Haiku
+- **Hybrid RAG**: dense pgvector search + BM25 sparse search fused via Reciprocal Rank Fusion (RRF k=60), reranked by CrossEncoder `ms-marco-MiniLM-L-6-v2`
+- **MCP Server** with 6 tools for Claude Desktop integration
+
+### Document Ingestion
+- **Direct upload** (file or URL) through `/ingest` — synchronous, ~400ms for typical docs
+- **Auto PDF detection** from URL Content-Type headers (arXiv, research papers)
+- **pymupdf** PDF parsing (10x faster than pypdf), capped at 50 pages
+- **Bedrock Titan Embed v2** at 1024-dim — no local GPU needed
+- **Idempotent** ingestion: SHA-256 chunk IDs, source deduplication in Postgres
+
+### Infrastructure & Hosting
+- **EC2 t3.micro** running FastAPI + Streamlit + nginx + Qdrant (Docker), with 2GB swap
+- **CloudFront HTTPS** CDN in front of EC2 — `AllViewerExceptHostHeader` origin policy
+- **nginx** with gzip compression, 250MB upload limit, static asset caching (24h TTL), WebSocket proxying
+- **RDS PostgreSQL 15** with pgvector on db.t3.micro (free tier)
+- **systemd** services for API and UI with auto-restart
+- **uvicorn** `--limit-max-requests 500` to auto-recycle worker and prevent memory bloat
+
+### UI Dashboard
+- Dark Streamlit theme (`#0d1117` background, `#238636` primary)
+- `@st.fragment(run_every=N)` non-blocking live agent feed
+- Plotly gauge charts for evaluation metrics, pie chart for pipeline status
+- Report download, tabbed session viewer, sortable session table
+- Sidebar health auto-refresh every 30s
+
+### Enterprise AWS Pipeline
+- **S3** document store with versioning and lifecycle rules
+- **SQS** ingestion queue with DLQ (3 retries)
+- **Step Functions** 3-stage state machine: Textract parse → Bedrock embed → pgvector store
+- **Lambda** functions: s3-trigger, stage1-parse, stage2-embed, stage3-store
+- **Amazon Textract** layout-aware PDF parsing (tables, figures, reading order)
+- **Amazon Comprehend** entity + key phrase extraction stored as JSONB metadata
+- **AWS Glue** catalog for batch ETL on large document sets
+- **SSM Parameter Store** for secrets management
+- **CloudWatch** billing alarm at $50
+
+---
+
+## AWS Resources
 
 | Service | Resource | Notes |
 |---|---|---|
-| EC2 | t2.micro (us-east-2) | FREE TIER — FastAPI + Streamlit + nginx |
-| RDS | db.t3.micro PostgreSQL 15 | pgvector extension, FREE TIER (stop when not demoing) |
+| EC2 | t3.micro (us-east-2) | FastAPI + Streamlit + nginx + Qdrant |
+| RDS | db.t3.micro PostgreSQL 15 | pgvector, free tier — stop when not demoing |
 | S3 | documind-documents-574772738370 | Document store + eval reports |
-| SQS | documind-ingestion-queue | Ingestion event bus (DLQ after 3 failures) |
+| SQS | documind-ingestion-queue | Event bus, DLQ after 3 failures |
 | Step Functions | documind-ingestion-pipeline | 3-stage STANDARD state machine |
 | DynamoDB | documind-jobs | PAY_PER_REQUEST, job status tracking |
-| Lambda | stage1-parse, stage2-embed, stage3-store | Triggered by S3 ObjectCreated |
-| Textract | Per-document | async AnalyzeDocument / DetectDocumentText |
-| Comprehend | Per-document | entity + key phrase extraction |
-| Bedrock | Claude Haiku 4.5 | LLM backbone for all agents and RAG |
-| CloudWatch | Billing alarm at $50 | Cost guard |
-| Glue | documind_catalog | Batch ETL for >10 doc bulk loads |
+| Lambda | stage1/2/3 | Triggered by S3 ObjectCreated |
+| Textract | Per-document | AnalyzeDocument for tables, DetectDocumentText for text |
+| Comprehend | Per-document | Entity + key phrase extraction |
+| Bedrock | Claude Haiku + Titan Embed v2 | LLM + embeddings backbone |
+| CloudFront | E1UNZSUNNCCIFV | HTTPS CDN, static asset caching |
+| CloudWatch | Billing alarm | Cost guard at $50 |
+| Glue | documind_catalog | Batch ETL |
 
 ---
 
@@ -73,59 +166,54 @@ User / Claude Desktop
 
 | Service | Estimated Monthly | Notes |
 |---|---|---|
-| EC2 t2.micro | $0 | AWS Free Tier (12 months) |
-| RDS db.t3.micro | $0 | AWS Free Tier — STOP when not demoing |
-| S3 | ~$0.02 | 50 documents, minimal storage |
+| EC2 t3.micro | $0 | AWS Free Tier (12 months) |
+| RDS db.t3.micro | $0 | AWS Free Tier — stop when not demoing |
+| S3 | ~$0.02 | Minimal storage |
 | Bedrock Haiku | ~$2.00 | 500 research runs × $0.004 avg |
+| Bedrock Titan Embed v2 | ~$0.10 | ~5M tokens/month |
 | Textract | ~$0.15 | 10 docs/month × $0.015/page |
 | Comprehend | ~$0.05 | Entity extraction |
-| SQS + Lambda | ~$0.00 | Well within free tier |
-| **Total** | **~$2.22/month** | Budget: $200 credit |
+| CloudFront | ~$0.00 | 1TB free/month |
+| SQS + Lambda | ~$0.00 | Within free tier |
+| **Total** | **~$2.32/month** | |
 
-> Stop RDS between demos: `aws rds stop-db-instance --db-instance-identifier documind-db`
+> Stop RDS when not demoing: `aws rds stop-db-instance --db-instance-identifier documind-db`
 
 ---
 
 ## Tech Stack
 
-| Technology | Role | Why Chosen |
-|---|---|---|
-| LangGraph | Workflow orchestration | Stateful, checkpointable DAG with conditional loops |
-| CrewAI + LiteLLM | Multi-agent collaboration | Declarative agents; LiteLLM routes to Bedrock |
-| Amazon Bedrock | LLM backbone | Claude Haiku — best cost/quality, no API key mgmt |
-| AWS RDS + pgvector | Vector + relational DB | Unified store: vectors, sessions, reports |
-| Amazon Textract | Layout-aware PDF parsing | Tables, figures, reading order; async polling |
-| Amazon Comprehend | Entity extraction | NER + key phrases stored as JSONB metadata |
-| S3 + SQS + Step Functions | Event-driven ingestion | Serverless, retryable 3-stage pipeline |
-| FastAPI | REST API | Async-native, auto-docs, WebSocket support |
-| Streamlit | Dashboard UI | Rapid prototyping, no frontend build step |
-| MCP SDK | Claude Desktop integration | First-class tool protocol for LLM clients |
-| sentence-transformers | Local embeddings + reranking | bge-small-en-v1.5 (384-dim), CPU-only, free |
-| asyncpg | PostgreSQL client | Native async, fastest Python Postgres driver |
-| Pydantic Guardrails | Answer validation | Hallucination + citation + length checks |
-| RAGAS | RAG evaluation | Faithfulness, answer relevancy, context precision |
-| EC2 + nginx | Reverse proxy | / → FastAPI:8000, /ui → Streamlit:8501 |
-
----
-
-## Prerequisites
-
-- Docker Desktop (for local Qdrant + Postgres + Redis dev)
-- Python 3.11+
-- [`uv`](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- AWS credentials with access to Bedrock, S3, SQS, RDS, Step Functions
-- Anthropic API key (fallback when Bedrock unavailable)
+| Technology | Role |
+|---|---|
+| LangGraph | Stateful research workflow with conditional critic→revise loop |
+| CrewAI + LiteLLM | 4-agent collaboration (Researcher, Analyst, Writer, Critic) |
+| Amazon Bedrock | Claude Haiku (LLM) + Titan Embed v2 (1024-dim embeddings) |
+| FastAPI | Async REST API + WebSocket streaming |
+| Streamlit | Dark-themed dashboard with live fragments |
+| asyncpg | Native async PostgreSQL driver |
+| pgvector | Vector similarity search on RDS PostgreSQL 15 |
+| Qdrant | Local vector DB for dev/fallback |
+| pymupdf | Fast PDF text extraction (10x faster than pypdf) |
+| sentence-transformers | CrossEncoder reranker (ms-marco-MiniLM-L-6-v2) |
+| BM25 | Sparse retrieval fused with dense via RRF |
+| Amazon Textract | Layout-aware PDF parsing (tables, figures, reading order) |
+| Amazon Comprehend | Entity + key phrase extraction |
+| S3 + SQS + Step Functions | Event-driven 3-stage enterprise ingestion pipeline |
+| CloudFront + nginx | HTTPS CDN, gzip, static caching, WebSocket proxying |
+| MCP SDK | Claude Desktop integration (6 tools) |
+| RAGAS | RAG evaluation framework |
+| Pydantic Guardrails | Hallucination + citation + length validation |
 
 ---
 
 ## Local Development
 
 ```bash
-# 1. Clone and enter project
+# 1. Clone
 git clone https://github.com/madhavanbalaji02/DocuMind && cd DocuMind
 
-# 2. Start local infrastructure (Postgres + Qdrant + Redis)
-docker compose up -d
+# 2. Start local infrastructure
+docker compose up -d        # Qdrant :6333, Postgres :5432, Redis :6379
 
 # 3. Install dependencies
 uv venv && source .venv/bin/activate
@@ -133,117 +221,79 @@ uv pip install -e ".[dev]"
 
 # 4. Configure environment
 cp .env.example .env
-# Edit .env — set ANTHROPIC_API_KEY and AWS credentials
+# Set ANTHROPIC_API_KEY, AWS credentials, DATABASE_URL
 
 # 5. Load demo knowledge base
-python scripts/load_demo_data.py
+make demo
 
 # 6. Run smoke test
-python scripts/smoke_test.py
+make smoke
 
 # 7. Start API + Dashboard
-uvicorn src.api.main:app --reload &
-streamlit run src/ui/app.py
+make api   # FastAPI on :8888
+make ui    # Streamlit on :8501
 ```
 
-API docs: http://localhost:8000/docs  
-Dashboard: http://localhost:8501
+API docs: `http://localhost:8888/docs`  
+Dashboard: `http://localhost:8501`
 
 ---
 
-## AWS Provisioning
+## AWS Provisioning & Deploy
 
 ```bash
 # Provision all AWS resources (idempotent)
 python aws/setup.py
 
-# Migrate existing Qdrant data to pgvector
-python aws/pgvector/migrate.py
+# Provision EC2 instance
+make provision          # python scripts/provision_ec2.py
 
 # Deploy to EC2
-python aws/ec2/setup_ec2.py
+make deploy             # rsync + systemd restart
 
 # Run RAGAS evaluation
 python evaluation/eval_runner.py --n-samples 10 --fail-below 0.60
 
-# TEARDOWN when not demoing (preserves RDS free tier hours)
+# Teardown all resources (irreversible, prompts first)
 python aws/teardown.py
 ```
 
 ---
 
-## Ingestion Pipeline
-
-Documents flow through a 3-stage serverless pipeline:
-
-```
-Upload PDF/URL
-      │
-      ▼
-  S3 ObjectCreated
-      │
-      ▼  Lambda s3-trigger
-  SQS message
-      │
-      ▼  Step Functions
-  Stage1: Textract parse (layout-aware, async)
-      │    ├── SECTION_HEADER, PARAGRAPH, TABLE, FIGURE
-      │    └── BoundingBox, reading_order, confidence
-      ▼
-  Stage2: Hierarchical chunking + bge-small embed
-      │    ├── Parent chunks: 600–1200 tokens (context for retrieval)
-      │    └── Child chunks: 100–300 tokens (vector(384), 20% overlap)
-      ▼
-  Stage3: Comprehend entities + pgvector store
-           └── CloudWatch metrics: DocumentsProcessed, ChunksIndexed
-```
-
-Cost guard: max 50 pages per document (`TEXTRACT_MAX_PAGES=50`).
-
----
-
 ## API Reference
+
+### Ingest a document
+
+```bash
+# File upload
+curl -X POST http://localhost:8888/ingest \
+  -F "file=@paper.pdf"
+
+# URL (auto-detects PDF vs HTML)
+curl -X POST http://localhost:8888/ingest \
+  -F "url=https://arxiv.org/pdf/1706.03762" \
+  -F "doc_type=web"
+```
 
 ### Start research
 
 ```bash
-curl -X POST http://localhost:8000/research \
+curl -X POST http://localhost:8888/research \
   -H "Content-Type: application/json" \
-  -d '{"topic": "Attention mechanisms in transformer models", "user_id": "alice"}'
-```
-
-### Upload document (S3 pipeline)
-
-```bash
-curl -X POST http://localhost:8000/documents/s3 \
-  -F "file=@paper.pdf"
-```
-
-### Ingest from URL
-
-```bash
-curl -X POST http://localhost:8000/documents/url \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://arxiv.org/abs/1706.03762", "doc_type": "web"}'
-```
-
-### Document status
-
-```bash
-curl http://localhost:8000/documents/{s3_key}/status
-```
-
-### Analytics
-
-```bash
-curl http://localhost:8000/documents/analytics
+  -d '{"topic": "Attention mechanisms in transformers", "user_id": "alice"}'
 ```
 
 ### Health check
 
 ```bash
-curl http://localhost:8000/health
-# Returns: {"status":"healthy","pgvector_ok":true,"llm_provider":"bedrock"}
+curl http://localhost:8888/health
+# {"status":"ok","qdrant_ok":true,"postgres_ok":true,"pgvector_ok":true,"embedding_mode":"bedrock","llm_provider":"bedrock"}
+```
+
+### Analytics
+
+```bash
+curl http://localhost:8888/documents/analytics
 ```
 
 ---
@@ -262,8 +312,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "env": {
         "ANTHROPIC_API_KEY": "sk-ant-...",
         "AWS_DEFAULT_REGION": "us-east-2",
-        "DATABASE_URL_ASYNC": "postgresql://documind:...@documind-db.XXXXX.us-east-2.rds.amazonaws.com:5432/documind",
-        "EMBEDDING_MODE": "local",
+        "DATABASE_URL_ASYNC": "postgresql+asyncpg://documind:...@documind-db.XXXXX.us-east-2.rds.amazonaws.com:5432/documind?ssl=true",
+        "EMBEDDING_MODE": "bedrock",
         "LLM_PROVIDER": "bedrock"
       }
     }
@@ -271,31 +321,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Available MCP tools: `search_knowledge_base`, `ingest_document`, `run_research`, `get_research_status`, `get_report`, `list_documents`
-
----
-
-## Evaluation
-
-The CI pipeline runs RAGAS-style evaluation on every change to `src/rag/`, `src/agents/`, or `src/workflow/nodes.py`:
-
-```bash
-python evaluation/eval_runner.py --n-samples 30 --fail-below 0.60
-```
-
-Metrics: `faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`  
-Report saved to S3: `s3://documind-documents-574772738370/evaluations/{timestamp}/report.json`
-
----
-
-## Running Tests
-
-```bash
-pytest tests/ -v
-pytest tests/test_rag.py -v       # RAG pipeline
-pytest tests/test_workflow.py -v  # LangGraph nodes
-pytest tests/test_agents.py -v    # CrewAI tools
-```
+Available tools: `search_knowledge_base`, `ingest_document`, `run_research`, `get_research_status`, `get_report`, `list_documents`
 
 ---
 
@@ -303,12 +329,15 @@ pytest tests/test_agents.py -v    # CrewAI tools
 
 | Metric | Value | Notes |
 |---|---|---|
-| Embedding throughput | ~167 texts/sec | bge-small-en-v1.5, M-series Mac CPU |
-| Embed latency p50 | ~9.4 ms | Local sentence-transformers |
-| RAG retrieve p50 | ~15 ms | pgvector IVFFlat + FTS hybrid |
-| Bedrock Haiku latency | ~1–3 sec | Claude Haiku 4.5 |
+| PDF parse (pymupdf) | ~176ms | 15-page paper on EC2 t3.micro |
+| URL fetch + parse | ~500ms | Including HTTP download |
+| Bedrock Titan embed | ~100ms/batch | 4 parallel threads, 1024-dim |
+| Full ingest (typical) | ~400–800ms | Chunk + embed + Qdrant + Postgres |
+| Full ingest (arxiv PDF) | ~3.5s | 15 pages, 92 chunks |
+| RAG retrieve p50 | ~15ms | pgvector IVFFlat + BM25 hybrid |
+| Bedrock Haiku latency | ~1–3s | Per LLM call |
 | End-to-end research | ~10–20 min | 4-agent CrewAI crew |
-| RAGAS composite (target) | ≥0.60 | CI fail threshold |
+| RAGAS target | ≥0.60 | CI fail threshold |
 
 ---
 
@@ -317,39 +346,59 @@ pytest tests/test_agents.py -v    # CrewAI tools
 ```
 documind/
 ├── src/
-│   ├── ingest/          # document loading, hierarchical chunking, pipeline
-│   ├── embeddings/      # local bge-small + Bedrock Titan embedding service
-│   ├── rag/             # hybrid retriever, reranker, RAG chain + guardrails
-│   ├── agents/          # CrewAI researcher/analyst/writer/critic (Bedrock LLM)
-│   ├── workflow/        # LangGraph state, nodes, graph
-│   ├── mcp_server/      # MCP server + tool registrations
-│   ├── api/             # FastAPI app, routes (research + documents)
-│   ├── db/              # asyncpg pool, migrations
-│   ├── workers/         # SQS ingestion worker daemon
-│   └── ui/              # Streamlit dashboard (Upload, Status, Evaluation)
+│   ├── api/             # FastAPI app, routes (ingest, research, documents, sessions)
+│   │   └── websocket.py # Real-time job status streaming
+│   ├── ingest/          # DocumentLoader (pymupdf/BS4), SemanticChunker, IngestionPipeline
+│   ├── embeddings/      # EmbeddingService (Bedrock Titan v2 / local bge-small)
+│   ├── rag/             # HybridRetriever (dense+BM25+RRF), CrossEncoderReranker, RAGChain
+│   ├── agents/          # CrewAI researcher/analyst/writer/critic factories
+│   ├── workflow/        # LangGraph ResearchState, nodes, graph builder
+│   ├── mcp_server/      # MCP stdio server + 6 tool registrations
+│   ├── db/              # asyncpg pool, migrations (001_initial.sql)
+│   ├── workers/         # SQS ingestion worker daemon thread
+│   ├── core/            # Logging (JSON), Qdrant client factory
+│   └── ui/              # Streamlit dark dashboard
 ├── aws/
 │   ├── setup.py         # Idempotent AWS resource provisioner
 │   ├── teardown.py      # Destroy all resources
-│   ├── config.py        # Central constants + boto3 helpers
-│   ├── bedrock/         # BedrockLLM client + embeddings + model registry
+│   ├── config.py        # Central constants + cost documentation
+│   ├── bedrock/         # BedrockLLM, Titan embeddings, model registry
 │   ├── comprehend/      # Entity + key phrase extraction
 │   ├── ec2/             # EC2 provisioner + bootstrap.sh
 │   ├── glue/            # Batch ETL for large document sets
 │   ├── lambda_functions/# s3-trigger, stage1-parse, stage2-embed, stage3-store
-│   ├── pgvector/        # PgVectorClient, HybridRetriever, schema.sql, migrate.py
+│   ├── pgvector/        # PgVectorClient, HybridRetriever, schema.sql
 │   ├── s3/              # DocumentStore
 │   ├── sqs/             # IngestionQueue
-│   ├── ssm/             # SecretsManager
+│   ├── ssm/             # SecretsManager wrapper
 │   ├── step_functions/  # pipeline.json + PipelineExecutor
-│   └── textract/        # TextractLayoutParser + TableToMarkdown + MultiModalExtractor
+│   └── textract/        # Layout parser, table extractor, multimodal extractor
+├── scripts/
+│   ├── provision_ec2.py # Launch + configure EC2 instance
+│   ├── deploy_to_ec2.sh # rsync + remote init + service restart
+│   └── ec2_init.sh      # Remote: venv, Docker, nginx, systemd setup
 ├── evaluation/
 │   ├── eval_runner.py   # RAGAS-style evaluation CLI
 │   ├── guardrails.py    # Pydantic answer validation
-│   └── ground_truth.jsonl  # 30 Q&A pairs
+│   └── ground_truth.jsonl
 ├── tests/
-├── .github/workflows/   # CI + RAG eval
-├── docker-compose.yml   # LOCAL DEV ONLY
-├── Dockerfile           # EC2 container image
-├── pyproject.toml
-└── .env.example
+├── .github/workflows/   # CI (pytest) + RAG eval on RAG/workflow changes
+├── .streamlit/config.toml # Dark theme, fast reruns, 200MB upload
+├── docker-compose.yml   # Local dev: Qdrant + Postgres + Redis
+├── Dockerfile
+├── Makefile             # api, ui, mcp, test, smoke, bench, demo, provision, deploy
+└── pyproject.toml
 ```
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `API error (/health): timed out` | EC2 memory pressure after large PDF | SSH in, `sudo systemctl restart documind-api` |
+| `ModuleNotFoundError: plotly` | Not installed in venv | `pip install plotly` in EC2 venv |
+| PDF upload fails silently | nginx `client_max_body_size` too small | Already set to 250m |
+| Qdrant health red | Docker container stopped to save RAM | `docker start tmp-qdrant-1` on EC2 |
+| `Vector dimension error` | Qdrant collection dim mismatch | `curl -X DELETE localhost:6333/collections/documind_chunks` then restart API |
+| `ssl` error on asyncpg | SSL params in both DSN and kwarg | Strip `?ssl=...` from DSN before passing to asyncpg |
