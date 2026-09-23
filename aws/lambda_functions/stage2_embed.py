@@ -3,7 +3,9 @@
 Input:  {s3_key, parse_result_key, page_count, element_counts, ...}
 Output: {s3_key, embed_result_key, chunk_count, parent_count, child_count, ...}
 
-Loads parse results from S3, runs HierarchicalChunker, embeds children.
+Loads parse results from S3, runs HierarchicalChunker, embeds children with
+Bedrock Titan v2 (the Lambda zip ships no ML libraries, so "local" mode only
+works when run outside Lambda).
 Saves embeddings to S3: embeddings/{s3_key}.json
 """
 
@@ -19,7 +21,7 @@ def lambda_handler(event, context):
     s3_key = event["s3_key"]
     parse_result_key = event["parse_result_key"]
     bucket = event.get("bucket", os.environ.get("S3_BUCKET", ""))
-    embedding_mode = os.environ.get("EMBEDDING_MODE", "local")
+    embedding_mode = os.environ.get("EMBEDDING_MODE", "bedrock")
 
     print(f"Stage2: chunking + embedding {s3_key}")
     t0 = time.time()
@@ -192,9 +194,9 @@ def _make_text_children(text: str, page: int, max_tokens: int = 300) -> list[dic
 def _embed_texts(texts: list[str], mode: str) -> list[list[float]]:
     if not texts:
         return []
-    if mode == "bedrock":
-        return _embed_bedrock(texts)
-    return _embed_local(texts)
+    if mode == "local":
+        return _embed_local(texts)
+    return _embed_bedrock(texts)
 
 
 def _embed_local(texts: list[str]) -> list[list[float]]:
@@ -211,7 +213,8 @@ def _embed_bedrock(texts: list[str]) -> list[list[float]]:
     model_id = "amazon.titan-embed-text-v2:0"
 
     def _one(text: str) -> list[float]:
-        body = json.dumps({"inputText": text, "dimensions": 1536, "normalize": True})
+        # Titan v2 accepts dimensions 256 / 512 / 1024 only
+        body = json.dumps({"inputText": text, "dimensions": 1024, "normalize": True})
         resp = client.invoke_model(modelId=model_id, body=body,
                                    contentType="application/json", accept="application/json")
         return json.loads(resp["body"].read())["embedding"]

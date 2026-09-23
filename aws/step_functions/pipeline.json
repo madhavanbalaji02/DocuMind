@@ -1,5 +1,5 @@
 {
-  "Comment": "DocuMind 3-stage document ingestion pipeline: Parse → Embed → Store",
+  "Comment": "DocuMind 3-stage document ingestion pipeline: Parse \u2192 Embed \u2192 Store",
   "StartAt": "Stage1_Parse",
   "States": {
     "Stage1_Parse": {
@@ -10,15 +10,14 @@
         "FunctionName": "documind-stage1-parse",
         "Payload.$": "$"
       },
-      "ResultPath": "$.parse_result",
       "OutputPath": "$.Payload",
       "Next": "Stage2_Embed",
       "Retry": [
         {
           "ErrorEquals": [
             "Lambda.TooManyRequestsException",
-            "Textract.LimitExceededException",
-            "States.TaskFailed"
+            "Lambda.ServiceException",
+            "Lambda.SdkClientException"
           ],
           "MaxAttempts": 3,
           "IntervalSeconds": 30,
@@ -27,7 +26,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "Next": "MarkFailed",
           "ResultPath": "$.error"
         }
@@ -35,18 +36,19 @@
     },
     "Stage2_Embed": {
       "Type": "Task",
-      "Comment": "Hierarchical chunking + bge-small-en-v1.5 embeddings (free, CPU)",
+      "Comment": "Hierarchical chunking + Bedrock Titan v2 embeddings (1024-dim)",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "documind-stage2-embed",
         "Payload.$": "$"
       },
-      "ResultPath": "$.embed_result",
       "OutputPath": "$.Payload",
       "Next": "Stage3_Store",
       "Retry": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "MaxAttempts": 2,
           "IntervalSeconds": 10,
           "BackoffRate": 2
@@ -54,7 +56,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "Next": "MarkFailed",
           "ResultPath": "$.error"
         }
@@ -62,25 +66,28 @@
     },
     "Stage3_Store": {
       "Type": "Task",
-      "Comment": "pgvector storage + Comprehend entities (~$0.001/doc)",
+      "Comment": "Comprehend entities + chunk index to S3 (indexed/) + metadata to DynamoDB",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "documind-stage3-store",
         "Payload.$": "$"
       },
-      "ResultPath": "$.store_result",
       "OutputPath": "$.Payload",
       "Next": "MarkReady",
       "Retry": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "MaxAttempts": 2,
           "IntervalSeconds": 5
         }
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "Next": "MarkFailed",
           "ResultPath": "$.error"
         }
@@ -93,7 +100,9 @@
       "Parameters": {
         "TableName": "documind-jobs",
         "Key": {
-          "s3_key": {"S.$": "$.s3_key"}
+          "s3_key": {
+            "S.$": "$.s3_key"
+          }
         },
         "UpdateExpression": "SET #s = :ready, #cc = :chunks",
         "ExpressionAttributeNames": {
@@ -101,8 +110,12 @@
           "#cc": "chunk_count"
         },
         "ExpressionAttributeValues": {
-          ":ready": {"S": "ready"},
-          ":chunks": {"N.$": "States.Format('{}', $.total_chunks)"}
+          ":ready": {
+            "S": "ready"
+          },
+          ":chunks": {
+            "N.$": "States.Format('{}', $.total_chunks)"
+          }
         }
       },
       "End": true
@@ -114,7 +127,9 @@
       "Parameters": {
         "TableName": "documind-jobs",
         "Key": {
-          "s3_key": {"S.$": "$.s3_key"}
+          "s3_key": {
+            "S.$": "$.s3_key"
+          }
         },
         "UpdateExpression": "SET #s = :failed, #e = :err",
         "ExpressionAttributeNames": {
@@ -122,8 +137,12 @@
           "#e": "error"
         },
         "ExpressionAttributeValues": {
-          ":failed": {"S": "failed"},
-          ":err": {"S.$": "$.error.Cause"}
+          ":failed": {
+            "S": "failed"
+          },
+          ":err": {
+            "S.$": "$.error.Cause"
+          }
         }
       },
       "End": true

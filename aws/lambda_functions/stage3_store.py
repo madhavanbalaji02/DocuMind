@@ -1,7 +1,12 @@
-"""Lambda Stage 3: Store embeddings to pgvector + Comprehend entity extraction.
+"""Lambda Stage 3: Comprehend entity extraction + store the chunk index.
 
 Input:  {s3_key, embed_result_key, chunk_count, ...}
-Output: {s3_key, status: "ready", total_chunks, ...}
+Output: {s3_key, status: "ready", total_chunks, indexed_key, ...}
+
+The app runs on SQLite (RDS was removed), so the final index lives in S3:
+  indexed/{s3_key}.json  — document metadata, entities, parent/child chunks + embeddings
+and document metadata is written to the DynamoDB jobs table (keyed by s3_key).
+MarkReady in the state machine then sets status = "ready".
 
 Also pushes CloudWatch metrics:
   DocuMind/DocumentsProcessed += 1
@@ -13,17 +18,20 @@ import boto3
 import json
 import os
 import time
+from datetime import datetime, timezone
 
 
 def lambda_handler(event, context):
     s3_key = event["s3_key"]
     embed_result_key = event["embed_result_key"]
     bucket = event.get("bucket", os.environ.get("S3_BUCKET", ""))
+    table_name = os.environ.get("DYNAMODB_TABLE", "documind-jobs")
     t0 = time.time()
 
     print(f"Stage3: storing {s3_key}")
 
     s3 = boto3.client("s3")
+    ddb = boto3.client("dynamodb")
     cw = boto3.client("cloudwatch")
 
     # Load embeddings from S3
@@ -31,94 +39,62 @@ def lambda_handler(event, context):
     embed_result = json.loads(resp["Body"].read())
     pairs = embed_result.get("pairs", [])
 
-    # Connect to pgvector
-    conn = _get_db_conn()
-    total_chunks = 0
-    try:
-        cursor = conn.cursor()
+    # Run Comprehend entity extraction on first 5000 chars
+    full_text = " ".join(
+        child.get("content", "")
+        for pair in pairs[:5]
+        for child in pair.get("children", [])
+    )[:5000]
+    entities_meta = {}
+    if os.environ.get("COMPREHEND_ENABLED", "true").lower() == "true" and full_text:
+        entities_meta = _run_comprehend(full_text)
 
-        # Get or create document record
-        filename = s3_key.split("/")[-1]
-        cursor.execute("""
-            INSERT INTO documents (s3_key, filename, doc_type, page_count, status)
-            VALUES (%s, %s, %s, %s, 'processing')
-            ON CONFLICT (s3_key) DO UPDATE SET status = 'processing'
-            RETURNING id::text
-        """, (s3_key, filename, event.get("doc_type", "pdf"),
-              event.get("page_count", 0)))
-        doc_id = cursor.fetchone()[0]
-        conn.commit()
+    total_chunks = sum(
+        1 for pair in pairs for child in pair.get("children", []) if child.get("embedding")
+    )
+    filename = event.get("filename") or s3_key.split("/")[-1]
+    processed_at = datetime.now(timezone.utc).isoformat()
 
-        # Run Comprehend entity extraction on first 5000 chars
-        full_text = " ".join(
-            child.get("content", "")
-            for pair in pairs[:5]
-            for child in pair.get("children", [])
-        )[:5000]
-        entities_meta = {}
-        if os.environ.get("COMPREHEND_ENABLED", "true").lower() == "true" and full_text:
-            entities_meta = _run_comprehend(full_text)
+    index = {
+        "s3_key": s3_key,
+        "filename": filename,
+        "doc_type": event.get("doc_type", "pdf"),
+        "page_count": event.get("page_count", 0),
+        "embed_mode": embed_result.get("embed_mode"),
+        "embed_dim": embed_result.get("embed_dim"),
+        "entities": entities_meta,
+        "parent_count": len(pairs),
+        "chunk_count": total_chunks,
+        "processed_at": processed_at,
+        "pairs": pairs,
+    }
+    indexed_key = f"indexed/{s3_key}.json"
+    s3.put_object(
+        Bucket=bucket,
+        Key=indexed_key,
+        Body=json.dumps(index, default=str).encode(),
+        ContentType="application/json",
+    )
 
-        # Store all parent + child chunks
-        for pair in pairs:
-            cursor.execute("""
-                INSERT INTO parent_chunks
-                    (document_id, section_title, element_type, page_start, page_end,
-                     content, char_count, chunk_index, metadata)
-                VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-                RETURNING id::text
-            """, (
-                doc_id,
-                pair.get("parent_section", ""),
-                pair.get("parent_element_type", "text"),
-                pair.get("parent_page_start", 1),
-                pair.get("parent_page_end", 1),
-                pair.get("parent_content", ""),
-                len(pair.get("parent_content", "")),
-                pairs.index(pair),
-                json.dumps({}),
-            ))
-            parent_id = cursor.fetchone()[0]
-
-            for child in pair.get("children", []):
-                embedding = child.get("embedding", [])
-                if not embedding:
-                    continue
-                vec_str = "[" + ",".join(f"{v:.6f}" for v in embedding) + "]"
-                cursor.execute("""
-                    INSERT INTO child_chunks
-                        (parent_id, document_id, content, embedding,
-                         element_type, page_number, chunk_index, entities, metadata)
-                    VALUES (%s::uuid, %s::uuid, %s, %s::vector,
-                            %s, %s, %s, %s::jsonb, %s::jsonb)
-                    ON CONFLICT DO NOTHING
-                """, (
-                    parent_id, doc_id, child.get("content", ""), vec_str,
-                    child.get("element_type", "text"),
-                    child.get("page_number", 1),
-                    child.get("chunk_index", 0),
-                    json.dumps(entities_meta),
-                    json.dumps({}),
-                ))
-                total_chunks += 1
-
-        # Mark document ready
-        cursor.execute("""
-            UPDATE documents
-            SET status='ready', entities=%s::jsonb, page_count=%s
-            WHERE id=%s::uuid
-        """, (json.dumps(entities_meta), event.get("page_count", 0), doc_id))
-        conn.commit()
-        print(f"Stored {total_chunks} chunks for document {doc_id}")
-
-    except Exception as e:
-        print(f"Stage3 DB error: {e}")
-        if conn:
-            conn.rollback()
-        raise
-    finally:
-        if conn:
-            conn.close()
+    # Metadata only — chunk bodies/embeddings would blow the 400 KB item limit
+    ddb.update_item(
+        TableName=table_name,
+        Key={"s3_key": {"S": s3_key}},
+        UpdateExpression=(
+            "SET filename = :fn, doc_type = :dt, page_count = :pc, parent_count = :pp, "
+            "indexed_key = :ik, entities = :en, processed_at = :ts"
+        ),
+        ExpressionAttributeValues={
+            ":fn": {"S": filename},
+            ":dt": {"S": index["doc_type"]},
+            ":pc": {"N": str(index["page_count"] or 0)},
+            ":pp": {"N": str(len(pairs))},
+            ":ik": {"S": indexed_key},
+            ":en": {"S": json.dumps(entities_meta)},
+            ":ts": {"S": processed_at},
+        },
+    )
+    print(f"Stored {total_chunks} chunks for {s3_key} → s3://{bucket}/{indexed_key}")
 
     elapsed_ms = int((time.time() - t0) * 1000)
 
@@ -139,20 +115,9 @@ def lambda_handler(event, context):
         **event,
         "status": "ready",
         "total_chunks": total_chunks,
+        "indexed_key": indexed_key,
         "elapsed_ms": elapsed_ms,
     }
-
-
-def _get_db_conn():
-    import psycopg2
-    import boto3
-    # Try env var first
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        ssm = boto3.client("ssm", region_name=os.environ.get("REGION", "us-east-2"))
-        resp = ssm.get_parameter(Name="/documind/rds-connection-string", WithDecryption=True)
-        dsn = resp["Parameter"]["Value"]
-    return psycopg2.connect(dsn)
 
 
 def _run_comprehend(text: str) -> dict:

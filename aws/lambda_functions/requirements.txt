@@ -1,3 +1,4 @@
+# Lambda zips ship only the handler file; boto3 comes from the Python 3.12 runtime.
+# sentence-transformers is only needed if stage2 runs with EMBEDDING_MODE=local outside Lambda.
 boto3>=1.35
-psycopg2-binary>=2.9
 sentence-transformers>=3.3

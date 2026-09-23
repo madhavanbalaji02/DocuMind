@@ -9,7 +9,7 @@ Resources created:
   DynamoDB jobs table
   IAM execution role with least-privilege policies
   SSM parameters
-  RDS db.t3.micro with pgvector (FREE TIER)
+  (RDS pgvector no longer provisioned — see main())
   Step Functions state machine
   AWS Glue database + crawler
   Lambda functions (s3-trigger, stage1, stage2, stage3)
@@ -465,7 +465,7 @@ def setup_lambdas(role_arn: str, queue_url: str) -> dict[str, str]:
         "AWS_ACCOUNT_ID": ACCOUNT_ID,
         "REGION": REGION,
         "DYNAMODB_TABLE": DYNAMODB_TABLE,
-        "EMBEDDING_MODE": "local",
+        "EMBEDDING_MODE": "bedrock",
     }
 
     arns: dict[str, str] = {}
@@ -606,7 +606,8 @@ def main() -> None:
     ddb_arn = setup_dynamodb()
     role_arn = setup_iam()
     setup_ssm(queue_url)
-    rds_arn = setup_rds()
+    # RDS is no longer provisioned — the app uses SQLite and Stage 3 stores to S3 + DynamoDB.
+    # setup_rds() is kept for reference if pgvector is ever brought back.
     setup_glue(role_arn)
     lambda_arns = setup_lambdas(role_arn, queue_url)
     sm_arn = setup_step_functions(role_arn, lambda_arns)
@@ -626,7 +627,6 @@ def main() -> None:
     console.print(f"  State machine: {sm_arn}")
     console.print(f"  SQS queue:     {queue_url}")
     console.print(f"  S3 bucket:     s3://{S3_BUCKET}")
-    console.print(f"\n[yellow]Next: run 'python aws/pgvector/migrate.py' after RDS is ready.[/yellow]")
 
 
 if __name__ == "__main__":
