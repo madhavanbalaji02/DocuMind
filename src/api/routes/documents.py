@@ -210,16 +210,17 @@ async def analytics():
     """System-wide analytics: documents, chunks, costs, eval scores."""
     result: dict = {}
 
-    # Document + chunk counts from pgvector
+    # Document + chunk counts (SQLite schema: rows exist only once ingested)
     try:
         row = await db.fetchrow(
             """
             SELECT
-                (SELECT COUNT(*) FROM documents)                                 AS total_documents,
-                (SELECT COUNT(*) FROM documents WHERE status='ready')            AS ready_documents,
-                (SELECT COUNT(*) FROM parent_chunks)                             AS total_parent_chunks,
-                (SELECT COUNT(*) FROM child_chunks)                              AS total_chunks,
-                (SELECT COALESCE(SUM(page_count), 0) FROM documents)            AS textract_pages_processed
+                COUNT(*)                         AS total_documents,
+                COUNT(*)                         AS ready_documents,
+                0                                AS failed_documents,
+                COALESCE(SUM(chunk_count), 0)    AS total_chunks,
+                0                                AS textract_pages_processed
+            FROM documents
             """
         )
         result.update(dict(row) if row else {})
