@@ -166,3 +166,59 @@ async def approve_research(session_id: str):
 
     asyncio.create_task(_resume())
     return {"session_id": session_id, "message": "Workflow resumed after human approval"}
+
+
+# ── Knowledge-base Q&A ────────────────────────────────────────────────────────
+
+
+class QueryRequest(BaseModel):
+    query: str
+    top_k: int = 5
+
+
+class _PassThroughReranker:
+    """Keeps hybrid-retrieval (RRF) order instead of loading a cross-encoder.
+
+    The cross-encoder pulls in torch (~400 MB), which the t3.micro host cannot
+    spare; RRF ordering is already a strong relevance signal.
+    """
+
+    async def rerank(self, query, chunks, top_n: int = 5):  # noqa: ARG002
+        return chunks[:top_n]
+
+
+@router.post("/query")
+async def query_knowledge_base(request: QueryRequest):
+    """Answer a question directly from the indexed documents (single RAG call)."""
+    question = request.query.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="query must not be empty")
+    top_k = max(1, min(request.top_k, 10))
+
+    from src.rag.rag_chain import RAGChain
+
+    chain = RAGChain(
+        reranker=_PassThroughReranker(),  # type: ignore[arg-type]
+        top_k_retrieve=top_k,
+        top_n_rerank=top_k,
+    )
+    try:
+        result = await asyncio.wait_for(chain.query(question, session_id="kb-query"), 90.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="query timed out")
+    except Exception as exc:
+        logger.error("Knowledge-base query failed: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc))
+    finally:
+        await chain.close()
+
+    return {
+        "answer": result.answer,
+        "confidence": round(result.confidence, 3),
+        "is_grounded": result.is_grounded,
+        "guardrail_warning": result.guardrail_warning,
+        "chunks": [
+            {"source": c.source, "score": round(c.score, 4), "text": c.text}
+            for c in result.retrieved_chunks
+        ],
+    }
