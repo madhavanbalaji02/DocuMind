@@ -11,6 +11,7 @@ dependencies = [
     # Core AI / orchestration
     "langchain>=0.3",
     "langchain-community>=0.3",
+    "langchain-text-splitters>=0.3",
     "langchain-anthropic>=0.2",
     "langgraph>=0.2",
     "langgraph-checkpoint-postgres>=0.1",
@@ -23,12 +24,16 @@ dependencies = [
     # Database
     "asyncpg>=0.30",
     "psycopg2-binary>=2.9",
+    "aiosqlite>=0.21",
+    # Vector store
+    "qdrant-client>=1.12",
     # API / serving
     "fastapi>=0.115",
     "uvicorn>=0.32",
     "websockets>=13",
     "python-multipart>=0.0.9",
     "streamlit>=1.40",
+    "plotly>=5.24",
     "mcp>=1.0",
     # Embeddings
     "sentence-transformers>=3.3",
