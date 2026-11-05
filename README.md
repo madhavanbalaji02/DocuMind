@@ -131,11 +131,14 @@
 - **uvicorn** `--limit-max-requests 500` to auto-recycle worker and prevent memory bloat
 
 ### UI Dashboard
-- Dark Streamlit theme (`#0d1117` background, `#238636` primary)
-- `@st.fragment(run_every=N)` non-blocking live agent feed
-- Plotly gauge charts for evaluation metrics, pie chart for pipeline status
-- Report download, tabbed session viewer, sortable session table
-- Sidebar health auto-refresh every 30s
+- Five pages via `st.navigation`: **Research**, **Ask**, **Library**, **History**, **System**
+- Custom dark theme: ink/indigo palette with WCAG AA text contrast; Inter + JetBrains Mono (theme config) and Source Serif 4 for report reading
+- **Research**: example prompts, live 6-step pipeline tracker, colour-coded agent cards (palette validated for colour-blind separation), report "paper" view with source cards and Markdown download
+- **Shareable report links** — `?session=<id>` reopens a run and survives refresh
+- **Ask**: one-shot cited Q&A over the knowledge base with confidence score and retrieved passages
+- **History**: selectable session table that opens the report and agent activity
+- **System**: usage stat tiles, service health, configuration, RAGAS scores, cost estimate
+- `@st.fragment(run_every=4)` non-blocking live updates; all dynamic HTML escaped
 
 ### Enterprise AWS Pipeline
 - **S3** document store with versioning and lifecycle rules
@@ -236,14 +239,32 @@ python aws/setup.py
 # Provision EC2 instance
 make provision          # python scripts/provision_ec2.py
 
-# Deploy to EC2
-make deploy             # rsync + systemd restart
+# Deploy to EC2 (manual)
+make deploy             # rsync + systemd restart; never overwrites the server's .env
 
 # Run RAGAS evaluation
 python evaluation/eval_runner.py --n-samples 10 --fail-below 0.60
 
 # Teardown all resources (irreversible, prompts first)
 python aws/teardown.py
+```
+
+---
+
+## CI/CD
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| **CI** (`ci.yml`) | push / PR to `main` | `pytest` (all external services mocked — no API keys needed) + `ruff check` |
+| **Deploy** (`deploy.yml`) | CI succeeds on `main`, or manual | Snapshots the current release, rsyncs code to EC2 (never `.env`), installs deps, restarts services, health-checks the server and the CloudFront URL, and **rolls back automatically** on failure |
+| **RAG Eval** (`rag_eval.yml`) | manual (`workflow_dispatch`) | RAGAS-style eval against ground truth; fails below 0.60 |
+
+The Deploy job skips until these repository secrets are set:
+
+```bash
+gh secret set EC2_HOST --body "<elastic-ip>"
+gh secret set EC2_SSH_KEY < ~/.ssh/documind-key.pem
+grep "^<elastic-ip> " ~/.ssh/known_hosts | gh secret set EC2_KNOWN_HOSTS
 ```
 
 ---
@@ -269,6 +290,15 @@ curl -X POST http://localhost:8888/ingest \
 curl -X POST http://localhost:8888/research \
   -H "Content-Type: application/json" \
   -d '{"topic": "Attention mechanisms in transformers", "user_id": "alice"}'
+```
+
+### Ask the knowledge base (single RAG call)
+
+```bash
+curl -X POST http://localhost:8888/research/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is Reciprocal Rank Fusion?", "top_k": 5}'
+# {"answer": "...", "confidence": 0.41, "is_grounded": true, "chunks": [{"source": "...", "score": 0.03, "text": "..."}]}
 ```
 
 ### Health check
@@ -325,7 +355,7 @@ Available tools: `search_knowledge_base`, `ingest_document`, `run_research`, `ge
 | RAG retrieve p50 | ~15ms | Qdrant dense + BM25 hybrid |
 | Bedrock Haiku latency | ~1–3s | Per LLM call |
 | End-to-end research | ~10–20 min | 4-agent CrewAI crew |
-| RAGAS target | ≥0.60 | CI fail threshold |
+| RAGAS target | ≥0.60 | Fail threshold for the manual eval workflow |
 
 ---
 
@@ -370,7 +400,7 @@ documind/
 │   ├── guardrails.py    # Pydantic answer validation
 │   └── ground_truth.jsonl
 ├── tests/
-├── .github/workflows/   # CI (pytest) + RAG eval on RAG/workflow changes
+├── .github/workflows/   # CI (pytest + ruff), Deploy (CD to EC2), RAG eval (manual)
 ├── .streamlit/config.toml # Dark theme, fast reruns, 200MB upload
 ├── docker-compose.yml   # Local dev: Qdrant + Postgres + Redis
 ├── Dockerfile
@@ -385,7 +415,6 @@ documind/
 | Symptom | Cause | Fix |
 |---|---|---|
 | `API error (/health): timed out` | EC2 memory pressure after large PDF | SSH in, `sudo systemctl restart documind-api` |
-| `ModuleNotFoundError: plotly` | Not installed in venv | `pip install plotly` in EC2 venv |
 | PDF upload fails silently | nginx `client_max_body_size` too small | Already set to 250m |
 | Qdrant health red | Docker container stopped to save RAM | `docker start tmp-qdrant-1` on EC2 |
 | `Vector dimension error` | Qdrant collection dim mismatch | `curl -X DELETE localhost:6333/collections/documind_chunks` then restart API |
