@@ -59,9 +59,19 @@ st.html("""
 }
 
 /* chrome */
+/* Hide menu/deploy chrome only — stToolbar also hosts the expand-sidebar control */
 #MainMenu, footer, .stDeployButton, [data-testid="stDecoration"],
-[data-testid="stStatusWidget"], [data-testid="stToolbar"] {display: none !important;}
+[data-testid="stStatusWidget"], [data-testid="stMainMenu"],
+[data-testid="stToolbarActions"] {display: none !important;}
 header[data-testid="stHeader"] {background: transparent;}
+
+/* Desktop: sidebar is the primary navigation — keep it permanently open */
+@media (min-width: 768px) {
+  [data-testid="stSidebar"], [data-testid="stSidebar"][aria-expanded="false"] {
+    min-width: 300px !important; max-width: 300px !important;
+    transform: none !important; margin-left: 0 !important; visibility: visible !important;}
+  [data-testid="stSidebarCollapseButton"] {display: none !important;}
+}
 .block-container {padding-top: 2.25rem; padding-bottom: 4rem; max-width: 1120px;}
 .stApp {background:
   radial-gradient(1200px 500px at 15% -10%, rgba(124,140,255,.08), transparent 60%), var(--bg);}
