@@ -212,7 +212,7 @@ async def run_crew(state: ResearchState) -> dict:
         citations = [
             {"source": s.source, "chunk_id": s.chunk_id, "excerpt": s.excerpt}
             for s in result.citations
-        ]
+        ] or _citations_from_markers(draft, state["retrieved_context"][:8])
     except asyncio.TimeoutError:
         logger.error("[run_crew] timed out session=%s", state["session_id"])
         draft = _fallback_report(state)
@@ -223,6 +223,22 @@ async def run_crew(state: ResearchState) -> dict:
         citations = []
 
     return {"draft_report": draft, "citations": citations, "status": "draft_complete"}
+
+
+def _citations_from_markers(report: str, context: list[dict]) -> list[dict]:
+    """Map [n] markers in the report to the numbered context passages given to the crew."""
+    import re
+
+    cited = sorted({int(n) for n in re.findall(r"\[(\d+)\]", report or "")})
+    return [
+        {
+            "source": context[n - 1].get("source", ""),
+            "chunk_id": context[n - 1].get("chunk_id", ""),
+            "excerpt": (context[n - 1].get("text") or "")[:300],
+        }
+        for n in cited
+        if 1 <= n <= len(context)
+    ]
 
 
 def _fallback_report(state: ResearchState) -> str:
