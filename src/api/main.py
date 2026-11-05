@@ -9,8 +9,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api.routes import ingest, research, sessions
 from src.api.routes import documents as documents_router
+from src.api.routes import ingest, research, sessions
 from src.api.websocket import router as ws_router
 from src.core.logging import get_logger
 

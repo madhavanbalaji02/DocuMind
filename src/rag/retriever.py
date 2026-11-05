@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from src.core.logging import get_logger
 import os
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from qdrant_client import AsyncQdrantClient
-
+from src.core.logging import get_logger
 from src.core.qdrant import make_async_qdrant_client
-
 from src.db import connection as db
 from src.embeddings.embedding_service import EmbeddingService
 
@@ -201,10 +198,10 @@ class HybridRetriever:
         session row does not exist (e.g. tool calls, smoke tests).
         """
         import re
-        _UUID_RE = re.compile(
+        uuid_re = re.compile(
             r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
         )
-        if not _UUID_RE.match(session_id):
+        if not uuid_re.match(session_id):
             return
 
         for chunk in chunks:

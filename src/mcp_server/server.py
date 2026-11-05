@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from src.core.logging import get_logger
 
 from dotenv import load_dotenv
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool
 
+from src.core.logging import get_logger
 from src.mcp_server.tools import TOOLS, dispatch
 
 logger = get_logger(__name__)

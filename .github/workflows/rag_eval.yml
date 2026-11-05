@@ -1,16 +1,8 @@
 name: RAG Eval on RAG Changes
 
+# Manual only: the eval needs a populated vector store plus ANTHROPIC_API_KEY /
+# AWS secrets, none of which exist in a fresh CI runner (it always scored 0.0).
 on:
-  push:
-    paths:
-      - 'src/rag/**'
-      - 'src/agents/**'
-      - 'src/workflow/nodes.py'
-      - 'evaluation/ground_truth.jsonl'
-      - 'evaluation/guardrails.py'
-      - 'aws/bedrock/**'
-      - 'aws/pgvector/**'
-    branches: [main]
   workflow_dispatch:
     inputs:
       n_samples:
@@ -35,22 +27,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-eval-${{ hashFiles('evaluation/requirements.txt') }}
+          key: ${{ runner.os }}-pip-eval-${{ hashFiles('pyproject.toml') }}
 
-      - name: Install evaluation dependencies
+      - name: Install project
         run: |
           pip install --upgrade pip
-          pip install \
-            sentence-transformers>=3.3 \
-            anthropic>=0.40 \
-            boto3>=1.35 \
-            pydantic>=2.10 \
-            python-dotenv>=1.0 \
-            rank-bm25>=0.2 \
-            numpy>=1.26
-
-      - name: Install project (no heavy deps)
-        run: pip install -e "." --no-deps
+          pip install -e "."
 
       - name: Run RAG eval (10 samples for CI speed)
         env:

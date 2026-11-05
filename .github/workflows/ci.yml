@@ -10,31 +10,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: documind_test
-          POSTGRES_USER: documind
-          POSTGRES_PASSWORD: documind_secret
-        ports:
-          - "5432:5432"
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      qdrant:
-        image: qdrant/qdrant:latest
-        ports:
-          - "6333:6333"
-        options: >-
-          --health-cmd "curl -sf http://localhost:6333/healthz"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
 
@@ -50,12 +25,9 @@ jobs:
 
       - name: Run tests
         env:
-          DATABASE_URL: postgresql://documind:documind_secret@localhost:5432/documind_test
-          DATABASE_URL_ASYNC: postgresql+asyncpg://documind:documind_secret@localhost:5432/documind_test
-          QDRANT_URL: http://localhost:6333
+          # Tests mock all external services (Qdrant, DB, LLMs) — no service containers needed
           EMBEDDING_MODE: local
-          LOCAL_EMBED_MODEL: BAAI/bge-small-en-v1.5
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LLM_PROVIDER: anthropic
         run: pytest tests/ -v --tb=short
 
   lint:

@@ -51,15 +51,22 @@ rsync -az --progress \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
     --exclude='.git' \
+    --exclude='.env' \
+    --exclude='.claude' \
+    --exclude='.DS_Store' \
     --exclude='hf_README.md' \
     . "$REMOTE:$APP_DIR/"
 
-# ── 3. Copy .env if present locally ───────────────────────────────────────────
-if [[ -f .env ]]; then
-    echo "[3/5] Copying .env…"
+# ── 3. Seed .env only on first deploy (never overwrite the server's config) ───
+# The server .env differs from local dev (e.g. EMBEDDING_MODE=bedrock, 1536-dim
+# vectors); overwriting it with a local .env breaks retrieval in production.
+if ssh $SSH_OPTS "$REMOTE" "test -f $APP_DIR/.env"; then
+    echo "[3/5] Server .env exists — leaving it unchanged."
+elif [[ -f .env ]]; then
+    echo "[3/5] No server .env — seeding from local .env…"
     scp $SSH_OPTS .env "$REMOTE:$APP_DIR/.env"
 else
-    echo "[3/5] No .env found locally — you'll need to create one on EC2."
+    echo "[3/5] No .env locally or on server — you'll need to create one on EC2."
     echo "      ssh -i $KEY $REMOTE"
     echo "      nano $APP_DIR/.env"
 fi

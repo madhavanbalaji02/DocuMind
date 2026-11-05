@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import io
 import os
-import time
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
 from src.core.logging import get_logger
 from src.db import connection as db
 
@@ -74,6 +72,7 @@ async def ingest_to_s3(file: UploadFile = File(...)):
 async def ingest_url(url: str = Form(...), doc_type: str = Form(default="web")):
     """Download URL and store in S3, then trigger ingestion pipeline."""
     import httpx
+
     from aws.s3.document_store import DocumentStore
     from aws.step_functions.executor import PipelineExecutor
 

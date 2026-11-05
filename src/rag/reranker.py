@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from src.core.logging import get_logger
 from typing import Any
 
+from src.core.logging import get_logger
 from src.rag.retriever import RetrievedChunk
 
 logger = get_logger(__name__)

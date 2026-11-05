@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from src.core.logging import get_logger
-
 from mcp.types import TextContent, Tool
+
+from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 

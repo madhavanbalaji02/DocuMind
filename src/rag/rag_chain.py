@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from src.rag.retriever import HybridRetriever, RetrievedChunk
-from src.rag.reranker import CrossEncoderReranker
 from src.core.logging import get_logger
+from src.rag.reranker import CrossEncoderReranker
+from src.rag.retriever import HybridRetriever, RetrievedChunk
 
 logger = get_logger(__name__)
 

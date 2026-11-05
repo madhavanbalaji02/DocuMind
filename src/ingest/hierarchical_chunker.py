@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from aws.textract.parser import LayoutDocument, LayoutElement
+    from aws.textract.parser import LayoutDocument
 
 PARENT_MIN_TOKENS = 600
 PARENT_MAX_TOKENS = 1200
@@ -62,7 +62,6 @@ class HierarchicalChunker:
         pairs: list[ParentChildPair] = []
         current_section_title = ""
         current_texts: list[tuple[str, int]] = []  # (text, page)
-        current_page_start = 1
 
         def _flush_text_section() -> None:
             if not current_texts:
@@ -84,7 +83,6 @@ class HierarchicalChunker:
             if element.element_type in (ElementType.TITLE, ElementType.SECTION_HEADER):
                 _flush_text_section()
                 current_section_title = element.content
-                current_page_start = element.page_number
 
             elif element.element_type == ElementType.TEXT:
                 current_texts.append((element.content, element.page_number))

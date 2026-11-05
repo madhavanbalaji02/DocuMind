@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.ingest.chunker import SemanticChunker, _content_hash
 from src.rag.retriever import RetrievedChunk, _reciprocal_rank_fusion
-
 
 # ── Chunker tests ─────────────────────────────────────────────────────────────
 
@@ -149,7 +147,7 @@ class TestRAGChain:
     @pytest.mark.asyncio
     async def test_query_calls_reranker_and_llm(self):
         """End-to-end mock: retriever → reranker → LLM."""
-        from src.rag.rag_chain import RAGChain, RAGResponse
+        from src.rag.rag_chain import RAGChain
 
         chunks = [
             RetrievedChunk(
@@ -208,14 +206,10 @@ class TestRAGChain:
         mock_reranker = AsyncMock()
         mock_reranker.rerank = AsyncMock(return_value=reranked)
 
-        mock_message = MagicMock()
-        mock_message.content = [MagicMock(text="Answer based on [1].")]
-
-        with patch("anthropic.AsyncAnthropic") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_message)
-            mock_cls.return_value = mock_client
-
+        with patch(
+            "src.rag.rag_chain._llm_complete",
+            AsyncMock(return_value="Answer based on [1]."),
+        ):
             chain = RAGChain(retriever=mock_retriever, reranker=mock_reranker)
             response = await chain.query("question", session_id="s1")
 

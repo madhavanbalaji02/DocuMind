@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from crewai import Agent, LLM
+from crewai import LLM, Agent
 
 from src.agents.tools import query_database, search_knowledge_base
 

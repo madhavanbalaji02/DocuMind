@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from qdrant_client.http.exceptions import UnexpectedResponse
 
 from src.core.logging import get_logger
 from src.db import connection as db

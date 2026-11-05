@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from src.core.logging import get_logger
-
 from fastapi import APIRouter, HTTPException
 
+from src.core.logging import get_logger
 from src.db import connection as db
 
 logger = get_logger(__name__)

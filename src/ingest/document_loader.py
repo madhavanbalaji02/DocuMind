@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from src.core.logging import get_logger
-from pathlib import Path
 import os
+from pathlib import Path
 
 import httpx
 import pandas as pd
 from bs4 import BeautifulSoup
+
+from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -25,9 +26,9 @@ class DocumentLoader:
             try:
                 import fitz  # pymupdf
                 doc = fitz.open(path)
-                MAX_PAGES = int(os.environ.get("TEXTRACT_MAX_PAGES", "50"))
+                max_pages = int(os.environ.get("TEXTRACT_max_pages", "50"))
                 pages: list[str] = []
-                for page_num in range(min(len(doc), MAX_PAGES)):
+                for page_num in range(min(len(doc), max_pages)):
                     text = doc[page_num].get_text("text").strip()
                     if text:
                         pages.append(f"[Page {page_num + 1}]\n{text}")
@@ -37,9 +38,9 @@ class DocumentLoader:
             except ImportError:
                 from pypdf import PdfReader
                 reader = PdfReader(path)
-                MAX_PAGES = int(os.environ.get("TEXTRACT_MAX_PAGES", "50"))
+                max_pages = int(os.environ.get("TEXTRACT_max_pages", "50"))
                 pages = []
-                for page_num, page in enumerate(reader.pages[:MAX_PAGES], start=1):
+                for page_num, page in enumerate(reader.pages[:max_pages], start=1):
                     text = page.extract_text() or ""
                     if text.strip():
                         pages.append(f"[Page {page_num}]\n{text}")
@@ -52,7 +53,8 @@ class DocumentLoader:
 
     async def load_url(self, url: str) -> str:
         """Fetch a web page or PDF URL and extract readable text."""
-        import tempfile, os
+        import os
+        import tempfile
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             response = await client.get(
                 url,

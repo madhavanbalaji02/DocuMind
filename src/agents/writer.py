@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from crewai import Agent, LLM
+from crewai import LLM, Agent
 
 
 def _build_llm() -> LLM:

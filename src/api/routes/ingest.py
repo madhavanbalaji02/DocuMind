@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from src.core.logging import get_logger
 import os
 import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -47,9 +48,13 @@ async def ingest_document(
                 "code" if ext in ("py", "js", "ts", "go", "rs", "java") else
                 "text"
             )
-            result = await pipeline.ingest(tmp_path, resolved_type, user_id=user_id)
-            os.unlink(tmp_path)
-            source = file.filename or tmp_path
+            source = Path(file.filename).name if file.filename else Path(tmp_path).name
+            try:
+                result = await pipeline.ingest(
+                    tmp_path, resolved_type, user_id=user_id, display_name=source
+                )
+            finally:
+                os.unlink(tmp_path)
 
         elif url is not None:
             result = await pipeline.ingest(url, doc_type if doc_type != "text" else "web", user_id=user_id)

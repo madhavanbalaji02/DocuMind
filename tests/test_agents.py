@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ── search_knowledge_base tool ────────────────────────────────────────────────
 
 class TestSearchKnowledgeBaseTool:
@@ -207,7 +206,7 @@ class TestResearchCrew:
 
             # _kickoff_sync now returns a string directly
             with patch.object(crew, "_kickoff_sync", return_value="# Writer report output"):
-                result = await crew.run(
+                await crew.run(
                     topic="Test topic",
                     context="Some context",
                     session_id="test-session",

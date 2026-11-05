@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.core.logging import get_logger
+import logging
 import os
 import time
 import uuid
@@ -10,11 +10,10 @@ from dataclasses import dataclass
 
 import typer
 from dotenv import load_dotenv
-from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
+from src.core.logging import get_logger
 from src.core.qdrant import make_async_qdrant_client
-
 from src.db import connection as db
 from src.embeddings.embedding_service import EmbeddingService
 from src.ingest.chunker import SemanticChunker
@@ -66,11 +65,22 @@ class IngestionPipeline:
         )
         return str(row["id"]) if row else None
 
-    async def ingest(self, source: str, doc_type: str, user_id: str = "anon") -> IngestionResult:
+    async def ingest(
+        self,
+        source: str,
+        doc_type: str,
+        user_id: str = "anon",
+        display_name: str | None = None,
+    ) -> IngestionResult:
         """Full ingestion pipeline for a single document source.
 
         Idempotent: skips sources already present in postgres.
+
+        *display_name* is the human-readable name stored in Postgres and Qdrant
+        payloads (e.g. the original upload filename) when *source* is only a
+        temporary path used for loading.
         """
+        name = display_name or source
         await self._ensure_collection()
         t_start = time.perf_counter()
 
@@ -94,9 +104,9 @@ class IngestionPipeline:
         text = await self.loader.load(source, doc_type)
 
         # Chunk
-        chunks = self.chunker.chunk_document(text, source, doc_type)
+        chunks = self.chunker.chunk_document(text, name, doc_type)
         if not chunks:
-            raise ValueError(f"No chunks produced from source: {source!r}")
+            raise ValueError(f"No chunks produced from source: {name!r}")
 
         chunk_texts = [c.text for c in chunks]
 
@@ -130,8 +140,8 @@ class IngestionPipeline:
         logger.info("Upserted %d vectors to Qdrant collection %r", len(points), self.collection)
 
         # Record in Postgres
-        filename = None if source.startswith("http") else source
-        url = source if source.startswith("http") else None
+        filename = None if name.startswith("http") else name
+        url = name if name.startswith("http") else None
 
         await db.execute(
             """
@@ -150,7 +160,7 @@ class IngestionPipeline:
         total_ms = (time.perf_counter() - t_start) * 1000
         logger.info(
             "Ingested %s: %d chunks, embed=%.0fms, total=%.0fms",
-            source,
+            name,
             len(chunks),
             embed_ms,
             total_ms,

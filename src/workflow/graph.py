@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from src.core.logging import get_logger
-
 from langgraph.graph import END, START, StateGraph
 
+from src.core.logging import get_logger
 from src.workflow.nodes import (
     analyze_data,
     critic_review,

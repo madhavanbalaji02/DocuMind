@@ -34,6 +34,7 @@ class TestPlanResearchNode:
     @pytest.mark.asyncio
     async def test_returns_list_of_questions(self):
         import json
+
         from src.workflow.nodes import plan_research
 
         questions = [
@@ -62,6 +63,7 @@ class TestPlanResearchNode:
     @pytest.mark.asyncio
     async def test_status_updated_after_planning(self):
         import json
+
         from src.workflow.nodes import plan_research
 
         questions = ["Q1", "Q2", "Q3", "Q4"]
