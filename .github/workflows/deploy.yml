@@ -1,0 +1,122 @@
+name: Deploy
+
+# CD: runs after CI succeeds on main (or manually). Syncs code to the EC2 box,
+# installs any new deps, restarts services, health-checks, and rolls back on
+# failure. The server's .env is never touched.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          HAS_KEY: ${{ secrets.EC2_SSH_KEY != '' }}
+          HAS_HOST: ${{ secrets.EC2_HOST != '' }}
+          HAS_KNOWN: ${{ secrets.EC2_KNOWN_HOSTS != '' }}
+        run: |
+          if [ "$HAS_KEY" = true ] && [ "$HAS_HOST" = true ] && [ "$HAS_KNOWN" = true ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Deploy skipped — set EC2_HOST, EC2_SSH_KEY, EC2_KNOWN_HOSTS secrets"
+          fi
+
+  deploy:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      APP_DIR: /home/ubuntu/documind
+      PREV_DIR: /home/ubuntu/documind-prev
+      PUBLIC_URL: https://d2ivfev3xe6utf.cloudfront.net
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Configure SSH
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host prod
+            HostName ${{ secrets.EC2_HOST }}
+            User ubuntu
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking yes
+            ConnectTimeout 20
+          EOF
+          ssh prod 'echo connected to $(hostname)'
+
+      - name: Snapshot current release (for rollback)
+        run: |
+          ssh prod "rsync -a --delete \
+            --exclude='.venv' --exclude='data/' --exclude='logs/' \
+            $APP_DIR/ $PREV_DIR/"
+
+      - name: Sync code
+        run: |
+          rsync -az --checksum \
+            --exclude='.venv' --exclude='data/' --exclude='logs/' \
+            --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
+            --exclude='.github' --exclude='.env' --exclude='.claude' \
+            --exclude='.vscode' --exclude='.DS_Store' --exclude='hf_README.md' \
+            --exclude='*.egg-info' --exclude='.pytest_cache' \
+            --exclude='.ruff_cache' --exclude='.mypy_cache' \
+            ./ prod:$APP_DIR/
+
+      - name: Install dependencies
+        run: ssh prod "cd $APP_DIR && .venv/bin/pip install --quiet -e ."
+
+      - name: Restart services
+        run: ssh prod 'sudo systemctl restart documind-api documind-ui'
+
+      - name: Health check
+        id: health
+        run: |
+          for i in $(seq 1 18); do
+            if ssh prod 'curl -sf localhost:8888/health | grep -q "\"status\":\"ok\"" \
+                         && systemctl is-active --quiet documind-ui'; then
+              echo "Server healthy"; break
+            fi
+            [ "$i" = 18 ] && { echo "Server unhealthy after 90s"; exit 1; }
+            sleep 5
+          done
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$PUBLIC_URL/api/health?t=$RANDOM")
+            [ "$code" = 200 ] && { echo "Public URL healthy"; exit 0; }
+            sleep 5
+          done
+          echo "Public URL returned $code"; exit 1
+
+      - name: Roll back on failure
+        if: failure() && steps.health.outcome == 'failure'
+        run: |
+          ssh prod "sudo journalctl -u documind-api --since '-3 min' --no-pager | tail -40" || true
+          ssh prod "rsync -a --exclude='.venv' --exclude='data/' --exclude='logs/' \
+                      $PREV_DIR/ $APP_DIR/ \
+                    && sudo systemctl restart documind-api documind-ui"
+          echo "::error::Deploy failed health check — rolled back to previous release"
