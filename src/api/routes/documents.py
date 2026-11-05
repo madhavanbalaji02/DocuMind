@@ -245,8 +245,11 @@ async def analytics():
             """
             SELECT
                 COUNT(*) AS total_sessions,
-                ROUND(AVG(EXTRACT(EPOCH FROM (completed_at - created_at)) * 1000)
-                    FILTER (WHERE status='completed' AND completed_at IS NOT NULL))::int AS avg_workflow_ms
+                CAST(ROUND(AVG(
+                    CASE WHEN status='completed' AND completed_at IS NOT NULL
+                         THEN (julianday(completed_at) - julianday(created_at)) * 86400000
+                    END
+                )) AS INTEGER) AS avg_workflow_ms
             FROM sessions
             """
         )

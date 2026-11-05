@@ -31,7 +31,16 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-#MainMenu, footer, header, .stDeployButton {visibility: hidden;}
+#MainMenu, footer, .stDeployButton {visibility: hidden;}
+[data-testid="stToolbar"], [data-testid="stDecoration"],
+[data-testid="stStatusWidget"] {visibility: hidden;}
+
+/* Always keep sidebar visible */
+[data-testid="stSidebar"][aria-expanded="false"] {
+    min-width: 18rem !important;
+    width: 18rem !important;
+    transform: none !important;
+}
 
 [data-testid="stSidebar"] {background:#0d1117;border-right:1px solid #21262d;}
 [data-testid="stSidebar"] * {color:#e6edf3 !important;}
@@ -550,27 +559,26 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    @st.fragment(run_every=30)
-    def _sidebar_health() -> None:
-        h = api_get("/health")
-        if h:
-            pg = "🟢" if h.get("postgres_ok") else "🔴"
-            qd = "🟢" if h.get("qdrant_ok") else "🔴"
-            em = h.get("embedding_mode", "local")
-            llm = h.get("llm_provider", "bedrock")
-            st.markdown(
-                f"Postgres {pg} &nbsp; Qdrant {qd}  \n"
-                f"Embed: `{em}` | LLM: `{llm}`",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown("⚠️ API unreachable")
+    try:
+        _h = httpx.get(f"{API_BASE}/health", timeout=3.0)
+        _h.raise_for_status()
+        _hd = _h.json()
+        _pg = "🟢" if _hd.get("postgres_ok") else "🔴"
+        _qd = "🟢" if _hd.get("qdrant_ok") else "🔴"
+        _em = _hd.get("embedding_mode", "local")
+        _lm = _hd.get("llm_provider", "bedrock")
+        st.markdown(
+            f"Postgres {_pg} &nbsp; Qdrant {_qd}  \n"
+            f"Embed: `{_em}` | LLM: `{_lm}`",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        st.markdown("⚠️ API unreachable", unsafe_allow_html=True)
 
-    _sidebar_health()
     st.divider()
 
     page = st.radio(
-        "",
+        "Navigation",
         [
             "🔬 Research",
             "📤 Upload",

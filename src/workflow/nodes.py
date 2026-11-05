@@ -114,15 +114,10 @@ async def retrieve_context(state: ResearchState) -> dict:
     """
     logger.info("[retrieve_context] session=%s", state["session_id"])
 
-    # Choose retriever based on configuration
-    try:
-        from aws.pgvector.retriever import PgVectorHybridRetriever
-        retriever = PgVectorHybridRetriever()
-        logger.info("[retrieve_context] using pgvector retriever")
-    except Exception:
-        from src.rag.retriever import HybridRetriever
-        retriever = HybridRetriever()  # type: ignore[assignment]
-        logger.info("[retrieve_context] using Qdrant retriever (pgvector unavailable)")
+    # Always use Qdrant — pgvector/RDS is stopped in this deployment
+    from src.rag.retriever import HybridRetriever
+    retriever = HybridRetriever()
+    logger.info("[retrieve_context] using Qdrant retriever")
 
     all_context: list[dict] = []
     seen: set[str] = set()
@@ -269,8 +264,8 @@ async def critic_review(state: ResearchState) -> dict:
         verdict = data.get("verdict", "pass")
         feedback = (
             f"Verdict: {verdict}\n"
-            f"Issues: {'; '.join(data.get('issues', []))}\n"
-            f"Suggestions: {'; '.join(data.get('suggestions', []))}"
+            f"Issues: {'; '.join(str(x) for x in data.get('issues', []))}\n"
+            f"Suggestions: {'; '.join(str(x) for x in data.get('suggestions', []))}"
         )
         status = f"critic_{verdict}"
     except asyncio.TimeoutError:

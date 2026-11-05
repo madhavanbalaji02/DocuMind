@@ -40,15 +40,7 @@ async def lifespan(app: FastAPI):
     await db.run_migrations()
 
     # pgvector schema skipped — using SQLite, RDS not required
-
-    # Ensure Qdrant collection for local dev
-    try:
-        from src.ingest.pipeline import IngestionPipeline
-        pipeline = IngestionPipeline()
-        await pipeline._ensure_collection()
-        await pipeline.close()
-    except Exception as e:
-        logger.warning("Qdrant collection setup skipped: %s", e)
+    # IngestionPipeline loaded lazily on first ingest to avoid 300MB startup cost
 
     # Start SQS ingestion worker (no-op if SQS_QUEUE_URL not set)
     try:
@@ -120,12 +112,8 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.warning("Postgres health: %s", exc)
 
-        try:
-            from aws.pgvector.client import PgVectorClient
-            pg = PgVectorClient()
-            pgvector_ok = pg.health_check()
-        except Exception:
-            pass  # pgvector is optional in local dev
+        # pgvector / RDS not used in this deployment (SQLite replaces it)
+        pgvector_ok = False
 
         status = "ok" if postgres_ok else "degraded"
         return {
@@ -164,16 +152,16 @@ def create_app() -> FastAPI:
                 """
                 SELECT
                     COUNT(*)                                                   AS sessions_total,
-                    COUNT(*) FILTER (WHERE status = 'completed')              AS sessions_completed,
-                    COUNT(*) FILTER (WHERE status = 'failed')                 AS sessions_failed,
+                    COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS sessions_completed,
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS sessions_failed,
                     (SELECT COUNT(*) FROM reports)                             AS reports_generated,
                     (SELECT COUNT(*) FROM agent_runs)                          AS agent_runs_total,
                     (SELECT COUNT(*) FROM documents)                           AS documents_ingested,
-                    ROUND(
-                        AVG(
-                            EXTRACT(EPOCH FROM (completed_at - created_at)) * 1000
-                        ) FILTER (WHERE status = 'completed' AND completed_at IS NOT NULL)
-                    )::bigint                                                   AS avg_workflow_ms
+                    CAST(ROUND(AVG(
+                        CASE WHEN status = 'completed' AND completed_at IS NOT NULL
+                             THEN (julianday(completed_at) - julianday(created_at)) * 86400000
+                        END
+                    )) AS INTEGER)                                              AS avg_workflow_ms
                 FROM sessions
                 """
             )

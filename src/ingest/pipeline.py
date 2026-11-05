@@ -71,6 +71,7 @@ class IngestionPipeline:
 
         Idempotent: skips sources already present in postgres.
         """
+        await self._ensure_collection()
         t_start = time.perf_counter()
 
         existing_id = await self._is_already_ingested(source)
